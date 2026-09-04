@@ -20,6 +20,12 @@ htmlcov/
 *.swp
 .DS_Store
 
-# The backend repository must not include the separate frontend or voice app.
+# The backend repository must not include the separate frontend.
 ui2/
-SaltyAI-CallAgent/
+
+# Downloaded/local voice artifacts
+SaltyAI-CallAgent/models/
+SaltyAI-CallAgent/*.ses
+SaltyAI-CallAgent/**/*.ses
+SaltyAI-CallAgent/**/*.wav
+*.ses
