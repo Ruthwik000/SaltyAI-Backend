@@ -1,4 +1,4 @@
-"""Local Ollama/Qwen conversational client for phone calls."""
+"""Local Ollama conversational client for phone calls."""
 
 import logging
 import re
@@ -24,7 +24,10 @@ class OllamaClient:
         language_rule = language_rules.get(language, f"Output ONLY the language represented by {language}.")
         system = (
             "You are SALTY, a concise marine safety assistant for fishermen. "
-            + language_rule + " Keep spoken answers under 55 words. "
+            + language_rule + " The answer must be in exactly the same language and writing system as the caller's latest message. "
+            "If the caller's message is Hindi, answer only in Devanagari Hindi; never answer in English or transliterated Hindi. "
+            "If the caller's message is Telugu, answer only in Telugu script. "
+            "Keep spoken answers under 55 words. "
             "Do not repeat the caller's language instruction or explain your language choice. "
             "Use these configured marine values for answers: wind 14 knots, "
             "significant waves 1.6 metres, swell 0.9 metres, current 0.45 metres per second, "
@@ -40,11 +43,24 @@ class OllamaClient:
             if turn.get("role") in ("user", "assistant") and turn.get("content"):
                 messages.append({"role": turn["role"], "content": turn["content"]})
         messages.append({"role": "user", "content": message})
+        logger.info(
+            "[OLLAMA INPUT] call_id=%s | language=%s | location=%s | message=%r",
+            call_id,
+            language,
+            location.name if location else "unknown",
+            message,
+        )
         try:
             async with httpx.AsyncClient(timeout=settings.OLLAMA_TIMEOUT_SECONDS) as client:
                 response = await client.post(
                     f"{settings.OLLAMA_URL.rstrip('/')}/api/chat",
-                    json={"model": settings.OLLAMA_MODEL, "messages": messages, "stream": False},
+                    json={
+                        "model": settings.OLLAMA_MODEL,
+                        "messages": messages,
+                        "stream": False,
+                        "keep_alive": "10m",
+                        "options": {"num_predict": settings.OLLAMA_MAX_TOKENS, "temperature": 0.2},
+                    },
                 )
             response.raise_for_status()
             content = (response.json().get("message", {}).get("content") or "").strip()
@@ -61,7 +77,13 @@ class OllamaClient:
             ).strip()
             if not content:
                 raise RuntimeError("Ollama returned an empty response")
-            logger.info("Ollama response succeeded | model=%s | call_id=%s", settings.OLLAMA_MODEL, call_id)
+            logger.info(
+                "[OLLAMA OUTPUT] model=%s | call_id=%s | requested_language=%s | response=%r",
+                settings.OLLAMA_MODEL,
+                call_id,
+                language,
+                content,
+            )
             return AIQueryResponse(response=content, language=language, priority="normal")
         except Exception as exc:
             logger.error("Ollama request failed: %s", exc, exc_info=True)

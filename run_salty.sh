@@ -9,7 +9,7 @@ CALL_AGENT_HOST="${SALTY_CALL_AGENT_HOST:-0.0.0.0}"
 API_URL="http://127.0.0.1:${API_PORT}"
 CALL_AGENT_URL="http://127.0.0.1:${CALL_AGENT_PORT}"
 OLLAMA_URL="${SALTY_OLLAMA_URL:-http://127.0.0.1:11434}"
-OLLAMA_MODEL="${SALTY_OLLAMA_MODEL:-qwen3:0.6b}"
+OLLAMA_MODEL="${SALTY_OLLAMA_MODEL:-gemma3:4b}"
 SALTY_LIVE="${SALTY_LIVE:-1}"
 # Chat is intentionally in demo mode while the marine agent is being tested.
 # Change this to "live" only when the real data/tool path is ready.

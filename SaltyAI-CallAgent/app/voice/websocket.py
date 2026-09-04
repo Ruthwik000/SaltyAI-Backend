@@ -363,6 +363,13 @@ async def handle_user_turn(
             response_text,
             ai_resp.language or stream_session.language,
         )
+        logger.info(
+            "[TTS SELECTION] call_id=%s | caller_language=%s | response_language=%s | response=%r",
+            call_id,
+            stream_session.language,
+            response_lang,
+            response_text,
+        )
 
         # Step 4: Record confirmed turn in Conversation Manager in strict sequential order
         if call_sess:
@@ -572,7 +579,13 @@ async def exotel_agentstream_endpoint(websocket: WebSocket):
 
                 # Safety buffer limit (auto-flush if talking > 15s continuously)
                 max_bytes = int(settings.VAD_MAX_BUFFER_SECONDS * settings.AUDIO_SAMPLE_RATE * settings.AUDIO_SAMPLE_WIDTH)
-                if len(stream_session.audio_buffer) > max_bytes:
+                # Do not auto-flush and cancel a model request that is already
+                # processing. Gemma can take several seconds on the first
+                # request; cancelling it here loses the caller's Hindi turn.
+                if len(stream_session.audio_buffer) > max_bytes and not (
+                    stream_session.active_turn_task
+                    and not stream_session.active_turn_task.done()
+                ):
                     logger.debug("Max audio buffer reached, flushing for transcription")
                     long_audio = stream_session.get_audio_and_reset()
                     await stream_session.cancel_active_turn()

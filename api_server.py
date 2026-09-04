@@ -125,7 +125,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(413, {"error": "query is too long"})
             result = OllamaAgent(
                 ERDDAPTools(_client()),
-                model=os.getenv("SALTY_OLLAMA_MODEL", "qwen3:0.6b"),
+                model=os.getenv("SALTY_OLLAMA_MODEL", "gemma3:4b"),
                 base_url=os.getenv("SALTY_OLLAMA_URL", "http://127.0.0.1:11434"),
                 mode=os.getenv("SALTY_AI_MODE", "mock"),
             ).answer(query)
