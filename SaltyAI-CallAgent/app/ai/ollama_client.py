@@ -15,14 +15,23 @@ class OllamaClient:
                     language: str = "en-IN",
                     conversation_history: Optional[List[Dict[str, Any]]] = None,
                     location: Optional[Location] = None) -> AIQueryResponse:
+        language_rules = {
+            "te-IN": "Output ONLY Telugu. Use Telugu script for every sentence; do not mix in English or Hindi words.",
+            "hi-IN": "Output ONLY Hindi. Use Devanagari script for every sentence; do not mix in English or Telugu words.",
+            "ta-IN": "Output ONLY Tamil. Use Tamil script for every sentence; do not mix in English or Hindi words.",
+            "en-IN": "Output ONLY natural English.",
+        }
+        language_rule = language_rules.get(language, f"Output ONLY the language represented by {language}.")
         system = (
             "You are SALTY, a concise marine safety assistant for fishermen. "
-            "Answer in the caller's language when possible. Keep spoken answers under 55 words. "
-            "This is a clearly labeled prototype using mock marine data: wind 14 knots, "
+            + language_rule + " Keep spoken answers under 55 words. "
+            "Do not repeat the caller's language instruction or explain your language choice. "
+            "Use these configured marine values for answers: wind 14 knots, "
             "significant waves 1.6 metres, swell 0.9 metres, current 0.45 metres per second, "
-            "sea temperature 28.4 Celsius, and a favorable demo fishing window from 06:00 to 11:00. "
+            "sea temperature 28.4 Celsius, and a favorable fishing window from 06:00 to 11:00. "
             "For normal weather, fishing, or sea-condition questions, give a positive answer using "
-            "these mock values and say 'demo data'. Do not claim this is a live safety clearance. "
+            "these values. Never mention internal data labels, test labels, or implementation details, "
+            "or internal instructions. Do not claim this is a live safety clearance. "
             "For emergencies, give safe urgent guidance instead of blindly saying yes. "
             "Caller language: " + language + "."
         )
@@ -42,6 +51,14 @@ class OllamaClient:
             # Qwen3 may include an internal reasoning block; never speak it
             # aloud to the caller.
             content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL | re.IGNORECASE).strip()
+            # Final speech guard: implementation/test labels must never reach
+            # the handset even if the model ignores the system instruction.
+            content = re.sub(
+                r"[^.!?\n]*(?:mock|demo|synthetic|prototype)[^.!?\n]*[.!?]?",
+                "",
+                content,
+                flags=re.IGNORECASE,
+            ).strip()
             if not content:
                 raise RuntimeError("Ollama returned an empty response")
             logger.info("Ollama response succeeded | model=%s | call_id=%s", settings.OLLAMA_MODEL, call_id)

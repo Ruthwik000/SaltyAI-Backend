@@ -5,6 +5,7 @@ Configures FastAPI, structured logging, middleware, lifecycle events, and routes
 
 import logging
 import asyncio
+from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -25,8 +26,12 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 try:
+    log_path = Path(settings.CALL_AGENT_LOG_FILE)
+    if not log_path.is_absolute():
+        log_path = Path(__file__).resolve().parents[1] / log_path
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     file_handler = RotatingFileHandler(
-        settings.CALL_AGENT_LOG_FILE, maxBytes=5 * 1024 * 1024,
+        log_path, maxBytes=5 * 1024 * 1024,
         backupCount=3, encoding="utf-8",
     )
     file_handler.setFormatter(logging.Formatter(

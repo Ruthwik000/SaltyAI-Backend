@@ -38,6 +38,34 @@ from app.api.emergency import emergency_detector
 
 logger = logging.getLogger(__name__)
 
+
+def infer_script_language(text: str) -> Optional[str]:
+    """Prefer the script actually recognized in the transcript."""
+    for char in text:
+        code = ord(char)
+        if 0x0C00 <= code <= 0x0C7F:
+            return "te-IN"
+        if 0x0900 <= code <= 0x097F:
+            return "hi-IN"
+        if 0x0B80 <= code <= 0x0BFF:
+            return "ta-IN"
+        if 0x0C80 <= code <= 0x0CFF:
+            return "kn-IN"
+        if 0x0D00 <= code <= 0x0D7F:
+            return "ml-IN"
+    return None
+
+
+def infer_response_language(text: str, fallback: str) -> str:
+    """Select Sarvam's voice from the answer text, not the caller location."""
+    script_language = infer_script_language(text)
+    if script_language:
+        return script_language
+    latin_letters = sum(1 for char in text if "a" <= char.lower() <= "z")
+    if latin_letters >= 3:
+        return "en-IN"
+    return fallback
+
 router = APIRouter(tags=["Voice Stream"])
 
 # English-only opening prompt for every call.
@@ -227,6 +255,13 @@ async def handle_user_turn(
             logger.debug(f"Empty transcript for call {call_id}, waiting for caller speech")
             return
 
+        # Prefer the writing system in the actual transcript when available;
+        # this prevents a language detector fallback from producing mixed
+        # Telugu/Hindi/English replies.
+        script_language = infer_script_language(transcript)
+        if script_language:
+            stt_res.language_code = script_language
+
         # Update language if detected
         if stt_res.language_code and stt_res.language_code != "unknown":
             stream_session.language = stt_res.language_code
@@ -249,6 +284,10 @@ async def handle_user_turn(
                     location_prompt = "Please tell me your coastal city, village, or fishing location so I can answer you."
                     call_sess.add_user_message(transcript, detected_language=stream_session.language)
                     call_sess.add_assistant_message(location_prompt)
+                    logger.info(
+                        "[CALL TRANSCRIPT] call_id=%s | language=%s | location=unknown | caller=%r | assistant=%r",
+                        call_id, stream_session.language, transcript, location_prompt,
+                    )
                     await stream_session.cancel_active_tts()
                     generation = stream_session.generation_id
                     task = asyncio.create_task(play_tts_audio_to_exotel(
@@ -262,6 +301,10 @@ async def handle_user_turn(
                 location_prompt = "Which coastal city, village, or fishing location are you calling from?"
                 call_sess.add_user_message(transcript, detected_language=stream_session.language)
                 call_sess.add_assistant_message(location_prompt)
+                logger.info(
+                    "[CALL TRANSCRIPT] call_id=%s | language=%s | location=unknown | caller=%r | assistant=%r",
+                    call_id, stream_session.language, transcript, location_prompt,
+                )
                 await stream_session.cancel_active_tts()
                 generation = stream_session.generation_id
                 task = asyncio.create_task(play_tts_audio_to_exotel(
@@ -316,7 +359,10 @@ async def handle_user_turn(
 
 
         response_text = ai_resp.response
-        response_lang = ai_resp.language or stream_session.language
+        response_lang = infer_response_language(
+            response_text,
+            ai_resp.language or stream_session.language,
+        )
 
         # Step 4: Record confirmed turn in Conversation Manager in strict sequential order
         if call_sess:
@@ -424,6 +470,10 @@ async def exotel_agentstream_endpoint(websocket: WebSocket):
 
                 # Play initial spoken greeting with dedicated generation ID
                 greeting_text = GREETING_MESSAGE
+                logger.info(
+                    "[CALL TRANSCRIPT] call_id=%s | language=en-IN | location=unknown | caller=%r | assistant=%r",
+                    call_id, "<call started>", greeting_text,
+                )
                 greet_gen_id = stream_session.next_generation()
                 greet_task = asyncio.create_task(
                     play_tts_audio_to_exotel(
