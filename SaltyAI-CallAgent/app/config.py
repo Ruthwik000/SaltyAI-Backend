@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = Field(default="INFO", description="Logging level")
     CALL_AGENT_LOG_FILE: str = Field(default="logs/call-agent.log", description="Local call transcript log file")
     DEBUG: bool = Field(default=False, description="Debug mode flag")
+    PLAY_GREETING: bool = Field(default=True, description="Play the automatic call-opening greeting")
+    ENABLE_BARGE_IN: bool = Field(default=False, description="Interrupt TTS when inbound speech is detected")
 
     # Exotel Configuration
     EXOTEL_API_KEY: str = Field(default="", description="Exotel API key")

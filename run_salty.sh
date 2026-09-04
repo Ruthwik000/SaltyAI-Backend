@@ -13,7 +13,7 @@ OLLAMA_MODEL="${SALTY_OLLAMA_MODEL:-gemma3:4b}"
 SALTY_LIVE="${SALTY_LIVE:-1}"
 # Chat is intentionally in demo mode while the marine agent is being tested.
 # Change this to "live" only when the real data/tool path is ready.
-SALTY_AI_MODE="mock"
+SALTY_AI_MODE="${SALTY_AI_MODE:-mock}"
 export SALTY_OLLAMA_URL="${OLLAMA_URL}"
 export SALTY_OLLAMA_MODEL="${OLLAMA_MODEL}"
 export SALTY_LIVE

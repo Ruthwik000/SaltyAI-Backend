@@ -57,14 +57,13 @@ def infer_script_language(text: str) -> Optional[str]:
 
 
 def infer_response_language(text: str, fallback: str) -> str:
-    """Select Sarvam's voice from the answer text, not the caller location."""
-    script_language = infer_script_language(text)
-    if script_language:
-        return script_language
-    latin_letters = sum(1 for char in text if "a" <= char.lower() <= "z")
-    if latin_letters >= 3:
-        return "en-IN"
-    return fallback
+    """Keep TTS in the language detected from the caller's latest turn.
+
+    The model may occasionally emit Latin characters (numbers, units, or an
+    imperfect English answer). Those characters must not switch a Hindi or
+    Telugu call to English pronunciation.
+    """
+    return fallback or settings.DEFAULT_FALLBACK_LANGUAGE
 
 router = APIRouter(tags=["Voice Stream"])
 
@@ -229,13 +228,15 @@ async def handle_user_turn(
         # Step 1: Transcribe caller speech with Sarvam Saaras STT
         t_stt_start = time.perf_counter()
         call_sess = conversation_manager.get_session(call_id)
-        # Let Sarvam detect the caller's language on the first turn. Once
-        # detected, keep using that language for faster and more consistent
-        # multilingual turns.
-        stt_language = (
-            "unknown"
-            if call_sess and call_sess.turn_count == 0
-            else stream_session.language
+        # Detect every turn. Locking STT to the first turn's language causes a
+        # Hindi/Telugu question to be transcribed and answered as English when
+        # the caller changes language or the first turn was misdetected.
+        stt_language = "unknown"
+        logger.info(
+            "[LANGUAGE FLOW] call_id=%s | stt_requested=%s | previous_session_language=%s",
+            call_id,
+            stt_language,
+            stream_session.language,
         )
         stt_res = await stt_client.transcribe(
             pcm_audio=pcm_audio,
@@ -265,6 +266,13 @@ async def handle_user_turn(
         # Update language if detected
         if stt_res.language_code and stt_res.language_code != "unknown":
             stream_session.language = stt_res.language_code
+        logger.info(
+            "[LANGUAGE FLOW] call_id=%s | stt_detected=%s | session_language=%s | transcript=%r",
+            call_id,
+            stt_res.language_code,
+            stream_session.language,
+            transcript,
+        )
 
         # Step 2: Layered Emergency Detection
         is_emergency, emergency_reason = emergency_detector.detect(transcript)
@@ -475,24 +483,28 @@ async def exotel_agentstream_endpoint(websocket: WebSocket):
                     initial_language=selected_lang,
                 )
 
-                # Play initial spoken greeting with dedicated generation ID
-                greeting_text = GREETING_MESSAGE
-                logger.info(
-                    "[CALL TRANSCRIPT] call_id=%s | language=en-IN | location=unknown | caller=%r | assistant=%r",
-                    call_id, "<call started>", greeting_text,
-                )
-                greet_gen_id = stream_session.next_generation()
-                greet_task = asyncio.create_task(
-                    play_tts_audio_to_exotel(
-                        websocket=websocket,
-                        stream_session=stream_session,
-                        text=greeting_text,
-                        language_code="en-IN",
-                        mark_name="greeting_end",
-                        target_generation_id=greet_gen_id,
+                # The greeting is optional. Disable it in production to avoid
+                # echoed greeting audio becoming a false caller turn.
+                if settings.PLAY_GREETING:
+                    greeting_text = GREETING_MESSAGE
+                    logger.info(
+                        "[CALL TRANSCRIPT] call_id=%s | language=en-IN | location=unknown | caller=%r | assistant=%r",
+                        call_id, "<call started>", greeting_text,
                     )
-                )
-                stream_session.active_tts_task = greet_task
+                    greet_gen_id = stream_session.next_generation()
+                    greet_task = asyncio.create_task(
+                        play_tts_audio_to_exotel(
+                            websocket=websocket,
+                            stream_session=stream_session,
+                            text=greeting_text,
+                            language_code="en-IN",
+                            mark_name="greeting_end",
+                            target_generation_id=greet_gen_id,
+                        )
+                    )
+                    stream_session.active_tts_task = greet_task
+                else:
+                    logger.info("[EXOTEL OUTBOUND] Automatic greeting disabled")
 
             # ------------------------------------------------------------------
             # 2. Event: MEDIA (Incoming audio chunk from caller's phone)
@@ -509,6 +521,10 @@ async def exotel_agentstream_endpoint(websocket: WebSocket):
 
                 # BARGE-IN CHECK: Is caller speaking while bot is actively outputting audio?
                 if stream_session.is_playing_tts and stream_session.total_bytes_sent > 0:
+                    if not settings.ENABLE_BARGE_IN:
+                        # Telephony echo can otherwise be interpreted as caller
+                        # speech and create a false STT turn (e.g. "Hello").
+                        continue
                     # 1. Playback Echo Guard: Ignore initial line turnaround reflection during first 600ms or first 2 chunks
                     elapsed_playback_sec = time.perf_counter() - stream_session.playback_started_at
                     ECHO_GUARD_SECONDS = 0.60

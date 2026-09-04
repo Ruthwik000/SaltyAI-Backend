@@ -193,9 +193,9 @@ class OllamaAgent:
             "This is mock data for testing, not a live marine forecast."
         )
 
-    def _answer_with_mock_context(self, user_query: str) -> dict[str, Any]:
+    def _answer_with_mock_context(self, user_query: str, location_context: str = "") -> dict[str, Any]:
         """Answer from a fixed demo forecast without asking Ollama to call tools."""
-        context = json.dumps(MOCK_MARINE_CONTEXT, indent=2)
+        forecast_context = json.dumps(MOCK_MARINE_CONTEXT, indent=2)
         messages = [
             {
                 "role": "system",
@@ -205,7 +205,7 @@ class OllamaAgent:
                     "fishing, sailing, and safety. Never say that tools or functions are unavailable, because "
                     "you already have the forecast context. Clearly call it development demo/mock data when "
                     "discussing current or real-world safety. Do not invent values that are not in the context.\n\n"
-                    f"DEMO MARINE FORECAST:\n{context}"
+                    f"DEMO MARINE FORECAST:\n{forecast_context}\n{location_context}"
                 ),
             },
             {"role": "user", "content": user_query},
@@ -222,10 +222,11 @@ class OllamaAgent:
             "synthetic": True,
         }
 
-    def answer(self, user_query: str, trace: bool = True) -> dict[str, Any]:
+    def answer(self, user_query: str, trace: bool = True, mode: str = "normal", context: str = "") -> dict[str, Any]:
         if self.mode == "mock":
-            return self._answer_with_mock_context(user_query)
-        messages: list[dict[str, Any]] = [{"role": "system", "content": "You are SALTY's helpful marine assistant. You can answer questions about sailing, boating, fishing, weather, sea conditions, forecasts, and safety. Use the supplied tools whenever factual or current data is needed. For safety, departure, or suitability questions, call get_marine_safety_forecast first and use its result in your answer. Never invent live values, coordinates, warnings, or source availability. If the data source returns no usable data, say that the live assessment is unavailable and offer general guidance; do not claim that safety or weather questions are outside your capabilities."}, {"role": "user", "content": user_query}]
+            return self._answer_with_mock_context(user_query, context)
+        mode_instruction = " Prefer dataset discovery, metadata, and time-series tools for this research question." if mode == "research" else ""
+        messages: list[dict[str, Any]] = [{"role": "system", "content": "You are SALTY's helpful marine assistant. You can answer questions about sailing, boating, fishing, weather, sea conditions, forecasts, and safety. Use the supplied tools whenever factual or current data is needed. For safety, departure, or suitability questions, call get_marine_safety_forecast first and use its result in your answer. Never invent live values, coordinates, warnings, or source availability. If the data source returns no usable data, say that the live assessment is unavailable and offer general guidance; do not claim that safety or weather questions are outside your capabilities." + mode_instruction + context}, {"role": "user", "content": user_query}]
         calls = []
         tool_results = []
         safety_question = re.search(r"\b(safe|safety|sail|sailing|boat|fishing|fish|sea condition|departure|hazard|danger|risk|worsen)\b", user_query.lower())

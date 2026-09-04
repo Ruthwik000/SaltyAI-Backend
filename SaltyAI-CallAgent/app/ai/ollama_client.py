@@ -19,6 +19,13 @@ class OllamaClient:
             "te-IN": "Output ONLY Telugu. Use Telugu script for every sentence; do not mix in English or Hindi words.",
             "hi-IN": "Output ONLY Hindi. Use Devanagari script for every sentence; do not mix in English or Telugu words.",
             "ta-IN": "Output ONLY Tamil. Use Tamil script for every sentence; do not mix in English or Hindi words.",
+            "kn-IN": "Output ONLY Kannada. Use Kannada script for every sentence; do not mix in English or Hindi words.",
+            "ml-IN": "Output ONLY Malayalam. Use Malayalam script for every sentence; do not mix in English or Hindi words.",
+            "bn-IN": "Output ONLY Bengali. Use Bengali script for every sentence; do not mix in English or Hindi words.",
+            "gu-IN": "Output ONLY Gujarati. Use Gujarati script for every sentence; do not mix in English or Hindi words.",
+            "mr-IN": "Output ONLY Marathi. Use Devanagari script for every sentence; do not mix in English or Hindi words.",
+            "pa-IN": "Output ONLY Punjabi. Use Gurmukhi script for every sentence; do not mix in English or Hindi words.",
+            "od-IN": "Output ONLY Odia. Use Odia script for every sentence; do not mix in English or Hindi words.",
             "en-IN": "Output ONLY natural English.",
         }
         language_rule = language_rules.get(language, f"Output ONLY the language represented by {language}.")
@@ -27,6 +34,7 @@ class OllamaClient:
             + language_rule + " The answer must be in exactly the same language and writing system as the caller's latest message. "
             "If the caller's message is Hindi, answer only in Devanagari Hindi; never answer in English or transliterated Hindi. "
             "If the caller's message is Telugu, answer only in Telugu script. "
+            "Do not translate the caller's message into English. Do not use English words for greetings, confirmations, units, or explanations. "
             "Keep spoken answers under 55 words. "
             "Do not repeat the caller's language instruction or explain your language choice. "
             "Use these configured marine values for answers: wind 14 knots, "

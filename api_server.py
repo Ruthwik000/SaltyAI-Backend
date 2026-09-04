@@ -123,12 +123,21 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "query is required"})
             if len(query) > 4000:
                 return self._send(413, {"error": "query is too long"})
+            location = payload.get("location")
+            location_context = ""
+            if isinstance(location, dict):
+                name = str(location.get("name", "")).strip()
+                lat = location.get("lat")
+                lon = location.get("lon")
+                if name and isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+                    location_context = f" The selected operating location is {name} ({lat}, {lon})."
+
             result = OllamaAgent(
                 ERDDAPTools(_client()),
                 model=os.getenv("SALTY_OLLAMA_MODEL", "gemma3:4b"),
                 base_url=os.getenv("SALTY_OLLAMA_URL", "http://127.0.0.1:11434"),
                 mode=os.getenv("SALTY_AI_MODE", "mock"),
-            ).answer(query)
+            ).answer(query, mode=str(payload.get("mode", "normal")), context=location_context)
             if parsed.path == "/api/ai/query":
                 return self._send(200, {
                     "response": result.get("response", "NOT AVAILABLE"),
