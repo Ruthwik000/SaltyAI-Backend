@@ -51,7 +51,7 @@ class PrototypeClient(ERDDAPClient):
 
 def _client() -> ERDDAPClient:
     if os.getenv("SALTY_LIVE") == "1":
-        return ERDDAPClient(timeout=15, synthetic_fallback=True)
+        return ERDDAPClient(timeout=15, synthetic_fallback=False)
     return PrototypeClient(synthetic_fallback=True)
 
 
@@ -113,12 +113,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        if parsed.path != "/api/llm/chat":
+        if parsed.path not in ("/api/llm/chat", "/api/ai/query"):
             return self._send(404, {"error": "NOT FOUND"})
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length) or b"{}")
-            query = str(payload.get("query", "")).strip()
+            query = str(payload.get("query", payload.get("message", ""))).strip()
             if not query:
                 return self._send(400, {"error": "query is required"})
             if len(query) > 4000:
@@ -127,7 +127,15 @@ class Handler(BaseHTTPRequestHandler):
                 ERDDAPTools(_client()),
                 model=os.getenv("SALTY_OLLAMA_MODEL", "qwen3:0.6b"),
                 base_url=os.getenv("SALTY_OLLAMA_URL", "http://127.0.0.1:11434"),
+                mode=os.getenv("SALTY_AI_MODE", "mock"),
             ).answer(query)
+            if parsed.path == "/api/ai/query":
+                return self._send(200, {
+                    "response": result.get("response", "NOT AVAILABLE"),
+                    "language": payload.get("language", "te-IN"),
+                    "priority": "emergency" if any(term in query.lower() for term in ("sos", "救", "emergency", "drowning", "help")) else "normal",
+                    "tool_calls": result.get("tool_calls", []),
+                })
             return self._send(200, result)
         except (OllamaError, json.JSONDecodeError, ValueError) as exc:
             return self._send(503, {"error": str(exc), "status": "LLM NOT AVAILABLE"})
