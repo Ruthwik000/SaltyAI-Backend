@@ -4,7 +4,10 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 API_PORT="${SALTY_API_PORT:-8010}"
 UI_PORT="${SALTY_UI_PORT:-3000}"
+CALL_AGENT_PORT="${SALTY_CALL_AGENT_PORT:-8001}"
+CALL_AGENT_HOST="${SALTY_CALL_AGENT_HOST:-0.0.0.0}"
 API_URL="http://127.0.0.1:${API_PORT}"
+CALL_AGENT_URL="http://127.0.0.1:${CALL_AGENT_PORT}"
 OLLAMA_URL="${SALTY_OLLAMA_URL:-http://127.0.0.1:11434}"
 OLLAMA_MODEL="${SALTY_OLLAMA_MODEL:-qwen3:0.6b}"
 SALTY_LIVE="${SALTY_LIVE:-1}"
@@ -41,11 +44,13 @@ stop_port_processes() {
 
 stop_port_processes "${API_PORT}"
 stop_port_processes "${UI_PORT}"
+stop_port_processes "${CALL_AGENT_PORT}"
 
 cleanup() {
   trap - EXIT INT TERM
   [[ -n "${API_PID:-}" ]] && kill "${API_PID}" 2>/dev/null || true
   [[ -n "${UI_PID:-}" ]] && kill "${UI_PID}" 2>/dev/null || true
+  [[ -n "${CALL_AGENT_PID:-}" ]] && kill "${CALL_AGENT_PID}" 2>/dev/null || true
   [[ -n "${OLLAMA_PID:-}" ]] && kill "${OLLAMA_PID}" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
@@ -102,10 +107,53 @@ if ! curl -fsS "${API_URL}/api/health" >/dev/null 2>&1; then
   exit 1
 fi
 
+CALL_AGENT_ENABLED=0
+CALL_AGENT_DIR="${ROOT_DIR}/SaltyAI-CallAgent"
+if [[ -f "${CALL_AGENT_DIR}/app/main.py" ]]; then
+  echo "Checking SALTY Call Agent dependencies..."
+  if ! "${PYTHON_BIN}" -c 'import fastapi, httpx, pydantic_settings, uvicorn' >/dev/null 2>&1; then
+    echo "Installing SALTY Call Agent dependencies..."
+    if ! "${PYTHON_BIN}" -m pip install -r "${CALL_AGENT_DIR}/requirements.txt"; then
+      echo "Could not install Call Agent dependencies; the Call Agent was not started." >&2
+    fi
+  fi
+
+  if "${PYTHON_BIN}" -c 'import fastapi, httpx, pydantic_settings, uvicorn' >/dev/null 2>&1; then
+    echo "Starting SALTY Call Agent on ${CALL_AGENT_URL}..."
+    (
+      cd "${CALL_AGENT_DIR}"
+      AI_BACKEND_URL="${API_URL}" \
+      CALL_AGENT_TEST_MODE=false \
+      PORT="${CALL_AGENT_PORT}" \
+      "${PYTHON_BIN}" -m uvicorn app.main:app --host "${CALL_AGENT_HOST}" --port "${CALL_AGENT_PORT}"
+    ) &
+    CALL_AGENT_PID=$!
+
+    for attempt in {1..30}; do
+      if curl -fsS "${CALL_AGENT_URL}/health/live" >/dev/null 2>&1; then
+        CALL_AGENT_ENABLED=1
+        break
+      fi
+      if ! kill -0 "${CALL_AGENT_PID}" 2>/dev/null; then
+        echo "SALTY Call Agent stopped unexpectedly; voice calls will be unavailable." >&2
+        break
+      fi
+      sleep 1
+    done
+    if [[ "${CALL_AGENT_ENABLED}" != "1" ]]; then
+      echo "SALTY Call Agent did not become ready on ${CALL_AGENT_URL}." >&2
+    fi
+  fi
+else
+  echo "SALTY Call Agent folder not found; voice calls will be unavailable." >&2
+fi
+
 echo "Starting SALTY Marine UI on http://127.0.0.1:${UI_PORT}..."
 (
   cd "${ROOT_DIR}/ui2"
-  NEXT_PUBLIC_SALTY_API_URL="${API_URL}" npm run dev -- --hostname 127.0.0.1 --port "${UI_PORT}"
+  NEXT_PUBLIC_SALTY_API_URL="${API_URL}" \
+  NEXT_PUBLIC_SALTY_CALL_AGENT_URL="${CALL_AGENT_URL}" \
+  npm run dev -- --hostname 127.0.0.1 --port "${UI_PORT}"
 ) &
 UI_PID=$!
 
@@ -113,6 +161,7 @@ echo
 echo "SALTY Marine is running"
 echo "  UI:  http://127.0.0.1:${UI_PORT}"
 echo "  API: ${API_URL}/api/health"
+echo "  Call Agent: ${CALL_AGENT_URL}/health/live"
 echo "  AI:  ${OLLAMA_URL} (${OLLAMA_MODEL})"
 echo "  AI mode: ${SALTY_AI_MODE}"
 if [[ "${SALTY_LIVE}" == "1" ]]; then
