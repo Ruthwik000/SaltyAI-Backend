@@ -32,7 +32,7 @@ from app.speech.audio_utils import b64_to_pcm, pcm_to_b64, chunk_pcm_audio, calc
 from app.speech.stt import stt_client
 
 from app.speech.tts import tts_client
-from app.conversation.manager import conversation_manager
+from app.conversation.manager import conversation_manager, needs_location_context, location_from_reply
 from app.ai.backend_client import ai_backend_client
 from app.api.emergency import emergency_detector
 
@@ -200,10 +200,19 @@ async def handle_user_turn(
     try:
         # Step 1: Transcribe caller speech with Sarvam Saaras STT
         t_stt_start = time.perf_counter()
+        call_sess = conversation_manager.get_session(call_id)
+        # Let Sarvam detect the caller's language on the first turn. Once
+        # detected, keep using that language for faster and more consistent
+        # multilingual turns.
+        stt_language = (
+            "unknown"
+            if call_sess and call_sess.turn_count == 0
+            else stream_session.language
+        )
         stt_res = await stt_client.transcribe(
             pcm_audio=pcm_audio,
             sample_rate=settings.AUDIO_SAMPLE_RATE,
-            language_code=stream_session.language,
+            language_code=stt_language,
         )
         t_stt_end = time.perf_counter()
         t_stt_ms = (t_stt_end - t_stt_start) * 1000
@@ -224,7 +233,45 @@ async def handle_user_turn(
 
         # Step 2: Layered Emergency Detection
         is_emergency, emergency_reason = emergency_detector.detect(transcript)
-        call_sess = conversation_manager.get_session(call_id)
+        # Location gate: marine questions must establish a caller location
+        # before the reasoning model is allowed to answer them.
+        if call_sess and (call_sess.awaiting_location or (needs_location_context(transcript) and not call_sess.has_location())):
+            if call_sess.awaiting_location:
+                caller_location = location_from_reply(transcript)
+                if caller_location:
+                    conversation_manager.update_location(call_id, caller_location)
+                    call_sess.awaiting_location = False
+                    transcript_for_ai = (
+                        f"The caller's location is {caller_location.name}. "
+                        "Use this location to answer the caller's most recent marine question."
+                    )
+                else:
+                    location_prompt = "Please tell me your coastal city, village, or fishing location so I can answer you."
+                    call_sess.add_user_message(transcript, detected_language=stream_session.language)
+                    call_sess.add_assistant_message(location_prompt)
+                    await stream_session.cancel_active_tts()
+                    generation = stream_session.generation_id
+                    task = asyncio.create_task(play_tts_audio_to_exotel(
+                        websocket, stream_session, location_prompt, "en-IN",
+                        mark_name="location_question", target_generation_id=generation,
+                    ))
+                    stream_session.active_tts_task = task
+                    return
+            else:
+                call_sess.awaiting_location = True
+                location_prompt = "Which coastal city, village, or fishing location are you calling from?"
+                call_sess.add_user_message(transcript, detected_language=stream_session.language)
+                call_sess.add_assistant_message(location_prompt)
+                await stream_session.cancel_active_tts()
+                generation = stream_session.generation_id
+                task = asyncio.create_task(play_tts_audio_to_exotel(
+                    websocket, stream_session, location_prompt, "en-IN",
+                    mark_name="location_question", target_generation_id=generation,
+                ))
+                stream_session.active_tts_task = task
+                return
+        else:
+            transcript_for_ai = transcript
 
         if is_emergency:
             logger.warning(
@@ -254,7 +301,7 @@ async def handle_user_turn(
         ai_resp = await ai_backend_client.query(
             call_id=call_id,
             phone_number=stream_session.phone_number,
-            message=transcript,
+            message=transcript_for_ai,
             language=stream_session.language,
             conversation_history=history_payload,
             location=location,
@@ -279,6 +326,14 @@ async def handle_user_turn(
         logger.info(
             f"[TURN PROCESSED] Call {call_id} | STT: {t_stt_ms:.1f}ms | AI: {t_ai_ms:.1f}ms | "
             f"User: '{transcript}' | AI: '{response_text[:70]}...' | Lang: {response_lang}"
+        )
+        logger.info(
+            "[CALL TRANSCRIPT] call_id=%s | language=%s | location=%s | caller=%r | assistant=%r",
+            call_id,
+            response_lang,
+            call_sess.location.name if call_sess and call_sess.location else "unknown",
+            transcript,
+            response_text,
         )
 
         # Step 5: Start exclusive TTS playback task

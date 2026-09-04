@@ -28,6 +28,7 @@ class CallSession:
     last_activity: float = field(default_factory=time.time)
     conversation_history: List[Dict[str, str]] = field(default_factory=list)
     state: str = "IDLE"  # IDLE, LISTENING, PROCESSING, SPEAKING
+    awaiting_location: bool = False
 
     def touch(self) -> None:
         """Update the last activity timestamp."""
@@ -64,6 +65,9 @@ class CallSession:
     def get_history_payload(self) -> List[Dict[str, Any]]:
         """Return history suitable for AI backend query."""
         return list(self.conversation_history)
+
+    def has_location(self) -> bool:
+        return bool(self.location and self.location.name)
 
 
 class ConversationManager:
@@ -153,3 +157,29 @@ class ConversationManager:
 
 # Singleton conversation manager instance
 conversation_manager = ConversationManager()
+
+
+LOCATION_QUESTION_TERMS = (
+    "weather", "forecast", "wind", "wave", "waves", "sea", "ocean", "fishing",
+    "fish", "sail", "sailing", "boat", "tide", "current", "rain", "storm",
+    "safe", "safety", "condition", "temperature", "tomorrow", "today", "coast",
+)
+
+
+def needs_location_context(text: str) -> bool:
+    """Return true for questions whose marine answer depends on a location."""
+    lowered = text.lower()
+    return any(term in lowered for term in LOCATION_QUESTION_TERMS)
+
+
+def location_from_reply(text: str) -> Optional[Location]:
+    """Accept a concise spoken place name without pretending to geocode it."""
+    cleaned = " ".join(text.strip().split())
+    lowered = cleaned.lower()
+    if not cleaned or len(cleaned) > 100:
+        return None
+    if lowered in {"yes", "no", "okay", "ok", "hello", "hi", "i don't know", "dont know"}:
+        return None
+    if len(cleaned.split()) > 8:
+        return None
+    return Location(name=cleaned)

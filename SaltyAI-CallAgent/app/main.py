@@ -5,6 +5,7 @@ Configures FastAPI, structured logging, middleware, lifecycle events, and routes
 
 import logging
 import asyncio
+from logging.handlers import RotatingFileHandler
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,12 +17,25 @@ from app.api.exotel import router as exotel_router
 from app.voice.websocket import router as voice_router, prewarm_greetings
 from app.conversation.manager import conversation_manager
 
-# Configure structured logging
+# Configure structured logging. Keep console output and add a rotating local
+# file so phone-call transcripts are easy to inspect.
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
+try:
+    file_handler = RotatingFileHandler(
+        settings.CALL_AGENT_LOG_FILE, maxBytes=5 * 1024 * 1024,
+        backupCount=3, encoding="utf-8",
+    )
+    file_handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    ))
+    logging.getLogger().addHandler(file_handler)
+except OSError as exc:
+    logging.getLogger("salty_call_agent").warning("Could not open call log file: %s", exc)
 logger = logging.getLogger("salty_call_agent")
 
 

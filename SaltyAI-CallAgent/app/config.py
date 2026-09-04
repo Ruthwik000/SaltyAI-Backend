@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     HOST: str = Field(default="0.0.0.0", description="Server host address")
     PORT: int = Field(default=8000, description="Server port")
     LOG_LEVEL: str = Field(default="INFO", description="Logging level")
+    CALL_AGENT_LOG_FILE: str = Field(default="/tmp/salty-call-agent.log", description="Local call transcript log file")
     DEBUG: bool = Field(default=False, description="Debug mode flag")
 
     # Exotel Configuration
