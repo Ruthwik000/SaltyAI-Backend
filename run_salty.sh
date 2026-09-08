@@ -8,14 +8,14 @@ CALL_AGENT_PORT="${SALTY_CALL_AGENT_PORT:-8001}"
 CALL_AGENT_HOST="${SALTY_CALL_AGENT_HOST:-0.0.0.0}"
 API_URL="http://127.0.0.1:${API_PORT}"
 CALL_AGENT_URL="http://127.0.0.1:${CALL_AGENT_PORT}"
-OLLAMA_URL="${SALTY_OLLAMA_URL:-http://127.0.0.1:11434}"
-OLLAMA_MODEL="${SALTY_OLLAMA_MODEL:-gemma3:4b}"
+GROQ_MODEL="${GROQ_MODEL:-openai/gpt-oss-20b}"
+GROQ_BASE_URL="${GROQ_BASE_URL:-https://api.groq.com/openai/v1}"
 SALTY_LIVE="${SALTY_LIVE:-1}"
 # Chat is intentionally in demo mode while the marine agent is being tested.
 # Change this to "live" only when the real data/tool path is ready.
 SALTY_AI_MODE="${SALTY_AI_MODE:-mock}"
-export SALTY_OLLAMA_URL="${OLLAMA_URL}"
-export SALTY_OLLAMA_MODEL="${OLLAMA_MODEL}"
+export GROQ_MODEL
+export GROQ_BASE_URL
 export SALTY_LIVE
 export SALTY_AI_MODE
 PYTHON_BIN="${ROOT_DIR}/.venv/bin/python"
@@ -51,38 +51,10 @@ cleanup() {
   [[ -n "${API_PID:-}" ]] && kill "${API_PID}" 2>/dev/null || true
   [[ -n "${UI_PID:-}" ]] && kill "${UI_PID}" 2>/dev/null || true
   [[ -n "${CALL_AGENT_PID:-}" ]] && kill "${CALL_AGENT_PID}" 2>/dev/null || true
-  [[ -n "${OLLAMA_PID:-}" ]] && kill "${OLLAMA_PID}" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
-echo "Checking Ollama for SALTY AI (${OLLAMA_MODEL})..."
-if curl -fsS "${OLLAMA_URL}/api/tags" >/dev/null 2>&1; then
-  echo "Ollama is already running."
-elif command -v ollama >/dev/null 2>&1; then
-  ollama serve >/tmp/salty-ollama.log 2>&1 &
-  OLLAMA_PID=$!
-  for attempt in {1..30}; do
-    if curl -fsS "${OLLAMA_URL}/api/tags" >/dev/null 2>&1; then
-      break
-    fi
-    if ! kill -0 "${OLLAMA_PID}" 2>/dev/null; then
-      echo "Ollama stopped unexpectedly; AI requests will be unavailable." >&2
-      break
-    fi
-    sleep 1
-  done
-  if curl -fsS "${OLLAMA_URL}/api/tags" >/dev/null 2>&1; then
-    if ! ollama list 2>/dev/null | awk -v model="${OLLAMA_MODEL}" 'NR > 1 && ($1 == model || index($1, model ":") == 1) {found=1} END {exit !found}'; then
-      echo "Downloading Ollama model ${OLLAMA_MODEL}..."
-      if ! ollama pull "${OLLAMA_MODEL}"; then
-        echo "Could not download ${OLLAMA_MODEL}; AI requests will be unavailable." >&2
-      fi
-    fi
-  fi
-else
-  echo "Ollama is not installed; AI requests will be unavailable." >&2
-  echo "Install Ollama from https://ollama.com/download and rerun this script." >&2
-fi
+echo "Configuring Groq AI for SALTY AI (${GROQ_MODEL})..."
 
 echo "Starting SALTY data API on ${API_URL}..."
 (
@@ -162,7 +134,7 @@ echo "SALTY Marine is running"
 echo "  UI:  http://127.0.0.1:${UI_PORT}"
 echo "  API: ${API_URL}/api/health"
 echo "  Call Agent: ${CALL_AGENT_URL}/health/live"
-echo "  AI:  ${OLLAMA_URL} (${OLLAMA_MODEL})"
+echo "  AI:  Groq (${GROQ_MODEL}) via ${GROQ_BASE_URL}"
 echo "  AI mode: ${SALTY_AI_MODE}"
 if [[ "${SALTY_LIVE}" == "1" ]]; then
   echo "  Mode: live ERDDAP"

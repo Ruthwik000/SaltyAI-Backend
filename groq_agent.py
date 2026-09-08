@@ -1,4 +1,4 @@
-"""Phase 11 Ollama tool-calling bridge for the SALTY data layer.
+"""Groq tool-calling bridge for the SALTY data layer.
 
 The model is an interpreter and response writer only. All numerical answers
 must come from an ERDDAP tool result; absent data is reported as unavailable.
@@ -20,12 +20,13 @@ from risk_features import build_72h_feature_dataset
 from weather_forecast import VISAKHAPATNAM_BBOX, load_datasets
 
 
-class OllamaError(RuntimeError):
+class GroqError(RuntimeError):
+    """Base exception for Groq API and tool-calling errors."""
     pass
 
 
 class ERDDAPTools:
-    """Allowlist of data tools exposed to Ollama."""
+    """Allowlist of data tools exposed to Groq."""
 
     def __init__(self, client: ERDDAPClient):
         self.client = client
@@ -36,7 +37,14 @@ class ERDDAPTools:
             datasets = self.client.list_datasets()
         except ERDDAPError:
             return {"query": query, "datasets": "NOT AVAILABLE"}
-        return {"query": query, "datasets": [dataset for dataset in datasets if all(term in f"{dataset['dataset_id']} {dataset['title']}".lower() for term in terms)]}
+        return {
+            "query": query,
+            "datasets": [
+                dataset
+                for dataset in datasets
+                if all(term in f"{dataset['dataset_id']} {dataset['title']}".lower() for term in terms)
+            ],
+        }
 
     def get_dataset_metadata(self, dataset_id: str) -> dict[str, Any]:
         try:
@@ -84,23 +92,128 @@ class ERDDAPTools:
             "get_marine_safety_forecast": self.get_marine_safety_forecast,
         }
         if name not in functions:
-            raise OllamaError(f"Tool is not allowed: {name}")
+            raise GroqError(f"Tool is not allowed: {name}")
         return functions[name](**arguments)
 
 
 TOOL_DEFINITIONS = [
-    {"type": "function", "function": {"name": "search_datasets", "description": "Search the ERDDAP dataset catalog.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
-    {"type": "function", "function": {"name": "get_dataset_metadata", "description": "Get metadata and variables for one ERDDAP dataset.", "parameters": {"type": "object", "properties": {"dataset_id": {"type": "string"}}, "required": ["dataset_id"]}}},
-    {"type": "function", "function": {"name": "get_point_data", "description": "Get one value at a time and lon/lat point.", "parameters": {"type": "object", "properties": {"dataset_id": {"type": "string"}, "variable": {"type": "string"}, "time": {"type": "string"}, "latitude": {"type": "number"}, "longitude": {"type": "number"}}, "required": ["dataset_id", "variable", "time", "latitude", "longitude"]}}},
-    {"type": "function", "function": {"name": "get_region_data", "description": "Get a spatial region for a time range. bbox is min_lat,max_lat,min_lon,max_lon.", "parameters": {"type": "object", "properties": {"dataset_id": {"type": "string"}, "variable": {"type": "string"}, "bbox": {"type": "array", "items": {"type": "number"}}, "time_range": {"type": "array", "items": {"type": "string"}}}, "required": ["dataset_id", "variable", "bbox", "time_range"]}}},
-    {"type": "function", "function": {"name": "get_time_series", "description": "Get a time series over a spatial region.", "parameters": {"type": "object", "properties": {"dataset_id": {"type": "string"}, "variable": {"type": "string"}, "bbox": {"type": "array", "items": {"type": "number"}}, "start": {"type": "string"}, "end": {"type": "string"}}, "required": ["dataset_id", "variable", "bbox", "start", "end"]}}},
-    {"type": "function", "function": {"name": "get_forecast", "description": "Get several variables over the same forecast window and region.", "parameters": {"type": "object", "properties": {"dataset_id": {"type": "string"}, "variables": {"type": "array", "items": {"type": "string"}}, "bbox": {"type": "array", "items": {"type": "number"}}, "start": {"type": "string"}, "end": {"type": "string"}}, "required": ["dataset_id", "variables", "bbox", "start", "end"]}}},
-    {"type": "function", "function": {"name": "get_marine_safety_forecast", "description": "Get a real 72-hour marine forecast and risk assessment for sailing, boating, fishing, departure planning, sea state, wind, waves, swell, currents, rainfall, and hazards. Use this whenever the user asks whether conditions are safe or suitable.", "parameters": {"type": "object", "properties": {"bbox": {"type": "array", "items": {"type": "number"}, "description": "Optional min_lat,max_lat,min_lon,max_lon; defaults to Visakhapatnam."}}, "required": []}}},
+    {
+        "type": "function",
+        "function": {
+            "name": "search_datasets",
+            "description": "Search the ERDDAP dataset catalog.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "Search query keywords"}},
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_dataset_metadata",
+            "description": "Get metadata and variables for one ERDDAP dataset.",
+            "parameters": {
+                "type": "object",
+                "properties": {"dataset_id": {"type": "string", "description": "Unique dataset identifier"}},
+                "required": ["dataset_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_point_data",
+            "description": "Get one value at a specific time and lat/lon coordinate point.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "dataset_id": {"type": "string"},
+                    "variable": {"type": "string"},
+                    "time": {"type": "string"},
+                    "latitude": {"type": "number"},
+                    "longitude": {"type": "number"},
+                },
+                "required": ["dataset_id", "variable", "time", "latitude", "longitude"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_region_data",
+            "description": "Get a spatial region for a time range. bbox is [min_lat, max_lat, min_lon, max_lon].",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "dataset_id": {"type": "string"},
+                    "variable": {"type": "string"},
+                    "bbox": {"type": "array", "items": {"type": "number"}},
+                    "time_range": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["dataset_id", "variable", "bbox", "time_range"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_time_series",
+            "description": "Get a time series over a spatial region.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "dataset_id": {"type": "string"},
+                    "variable": {"type": "string"},
+                    "bbox": {"type": "array", "items": {"type": "number"}},
+                    "start": {"type": "string"},
+                    "end": {"type": "string"},
+                },
+                "required": ["dataset_id", "variable", "bbox", "start", "end"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_forecast",
+            "description": "Get several variables over the same forecast window and region.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "dataset_id": {"type": "string"},
+                    "variables": {"type": "array", "items": {"type": "string"}},
+                    "bbox": {"type": "array", "items": {"type": "number"}},
+                    "start": {"type": "string"},
+                    "end": {"type": "string"},
+                },
+                "required": ["dataset_id", "variables", "bbox", "start", "end"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_marine_safety_forecast",
+            "description": "Get a real 72-hour marine forecast and risk assessment for sailing, boating, fishing, departure planning, sea state, wind, waves, swell, currents, rainfall, and hazards. Use this whenever the user asks whether conditions are safe or suitable.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "bbox": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "Optional min_lat,max_lat,min_lon,max_lon; defaults to Visakhapatnam.",
+                    }
+                },
+                "required": [],
+            },
+        },
+    },
 ]
 
 
-# Development-only context used when SALTY_AI_MODE=mock. It is deliberately
-# marked as demo data and is never presented as a live observation or warning.
+# Development-only context used when SALTY_AI_MODE=mock.
 MOCK_MARINE_CONTEXT: dict[str, Any] = {
     "status": "DEMO DATA",
     "location": "Visakhapatnam",
@@ -116,25 +229,54 @@ MOCK_MARINE_CONTEXT: dict[str, Any] = {
 }
 
 
-class OllamaAgent:
-    def __init__(self, tools: ERDDAPTools, model: str = "llama3.1", base_url: str = "http://127.0.0.1:11434", timeout: float = 120.0, mode: str | None = None):
+class GroqAgent:
+    """Production Groq agent for the SALTY data layer with OpenAI-compatible tool calling."""
+
+    def __init__(
+        self,
+        tools: ERDDAPTools,
+        model: str | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        timeout: float = 30.0,
+        mode: str | None = None,
+    ):
         self.tools = tools
-        self.model = model
-        self.base_url = base_url.rstrip("/")
+        self.model = model or os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
+        self.base_url = (base_url or os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")).rstrip("/")
+        self.api_key = api_key or os.getenv("GROQ_API_KEY", "")
         self.timeout = timeout
         self.mode = (mode or os.getenv("SALTY_AI_MODE", "live")).lower()
 
     def _chat(self, messages: list[dict[str, Any]], include_tools: bool = True) -> dict[str, Any]:
-        payload_data: dict[str, Any] = {"model": self.model, "messages": messages, "stream": False}
+        """Execute chat completion request against Groq API."""
+        if not self.api_key and self.mode != "mock":
+            raise GroqError("GROQ_API_KEY environment variable is not configured")
+
+        payload_data: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.2,
+        }
         if include_tools:
             payload_data["tools"] = TOOL_DEFINITIONS
-        payload = json.dumps(payload_data).encode()
-        request = Request(f"{self.base_url}/api/chat", data=payload, headers={"Content-Type": "application/json"})
+            payload_data["tool_choice"] = "auto"
+
+        payload = json.dumps(payload_data).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+        request = Request(f"{self.base_url}/chat/completions", data=payload, headers=headers)
         try:
             with urlopen(request, timeout=self.timeout) as response:
-                return json.loads(response.read().decode())
+                data = json.loads(response.read().decode("utf-8"))
+                choices = data.get("choices") or []
+                if choices:
+                    return {"message": choices[0].get("message", {})}
+                return {"message": {}}
         except (OSError, URLError, json.JSONDecodeError) as exc:
-            raise OllamaError(f"Ollama is unavailable at {self.base_url}: {exc}") from exc
+            raise GroqError(f"Groq API is unavailable at {self.base_url}: {exc}") from exc
 
     @staticmethod
     def _is_unsupported_refusal(response: str) -> bool:
@@ -194,7 +336,7 @@ class OllamaAgent:
         )
 
     def _answer_with_mock_context(self, user_query: str, location_context: str = "") -> dict[str, Any]:
-        """Answer from a fixed demo forecast without asking Ollama to call tools."""
+        """Answer from a fixed demo forecast without asking Groq to call external tools."""
         forecast_context = json.dumps(MOCK_MARINE_CONTEXT, indent=2)
         messages = [
             {
@@ -210,8 +352,18 @@ class OllamaAgent:
             },
             {"role": "user", "content": user_query},
         ]
-        response = self._chat(messages, include_tools=False).get("message", {}).get("content", "").strip()
-        safety_question = bool(re.search(r"\b(safe|safety|sail|sailing|boat|fishing|fish|sea condition|departure|hazard|danger|risk|worsen)\b", user_query.lower()))
+        try:
+            response_msg = self._chat(messages, include_tools=False).get("message", {})
+            response = (response_msg.get("content") or "").strip()
+        except Exception:
+            response = ""
+
+        safety_question = bool(
+            re.search(
+                r"\b(safe|safety|sail|sailing|boat|fishing|fish|sea condition|departure|hazard|danger|risk|worsen)\b",
+                user_query.lower(),
+            )
+        )
         if not response or self._is_unsupported_refusal(response):
             response = self._mock_safety_response() if safety_question else self._mock_general_response()
         return {
@@ -225,47 +377,86 @@ class OllamaAgent:
     def answer(self, user_query: str, trace: bool = True, mode: str = "normal", context: str = "") -> dict[str, Any]:
         if self.mode == "mock":
             return self._answer_with_mock_context(user_query, context)
-        mode_instruction = " Prefer dataset discovery, metadata, and time-series tools for this research question." if mode == "research" else ""
-        messages: list[dict[str, Any]] = [{"role": "system", "content": "You are SALTY's helpful marine assistant. You can answer questions about sailing, boating, fishing, weather, sea conditions, forecasts, and safety. Use the supplied tools whenever factual or current data is needed. For safety, departure, or suitability questions, call get_marine_safety_forecast first and use its result in your answer. Never invent live values, coordinates, warnings, or source availability. If the data source returns no usable data, say that the live assessment is unavailable and offer general guidance; do not claim that safety or weather questions are outside your capabilities." + mode_instruction + context}, {"role": "user", "content": user_query}]
+
+        mode_instruction = (
+            " Prefer dataset discovery, metadata, and time-series tools for this research question."
+            if mode == "research"
+            else ""
+        )
+        messages: list[dict[str, Any]] = [
+            {
+                "role": "system",
+                "content": (
+                    "You are SALTY's helpful marine assistant. You can answer questions about sailing, boating, "
+                    "fishing, weather, sea conditions, forecasts, and safety. Use the supplied tools whenever "
+                    "factual or current data is needed. For safety, departure, or suitability questions, call "
+                    "get_marine_safety_forecast first and use its result in your answer. Never invent live values, "
+                    "coordinates, warnings, or source availability. If the data source returns no usable data, "
+                    "say that the live assessment is unavailable and offer general guidance; do not claim that "
+                    "safety or weather questions are outside your capabilities."
+                    + mode_instruction
+                    + context
+                ),
+            },
+            {"role": "user", "content": user_query},
+        ]
         calls = []
         tool_results = []
-        safety_question = re.search(r"\b(safe|safety|sail|sailing|boat|fishing|fish|sea condition|departure|hazard|danger|risk|worsen)\b", user_query.lower())
+        safety_question = bool(
+            re.search(
+                r"\b(safe|safety|sail|sailing|boat|fishing|fish|sea condition|departure|hazard|danger|risk|worsen)\b",
+                user_query.lower(),
+            )
+        )
         if safety_question:
-            # Small local models sometimes respond that safety is outside the
-            # tool set even when a suitable tool is available. Force the
-            # grounded safety call so the final answer is based on real data.
+            # Force grounded safety call so the final answer is based on real data
             name = "get_marine_safety_forecast"
             arguments: dict[str, Any] = {}
             data = self.tools.execute(name, arguments)
             calls.append({"tool": name, "arguments": arguments})
             tool_results.append({"tool": name, "data": data})
-            messages.append({"role": "assistant", "content": "", "tool_calls": [{"function": {"name": name, "arguments": arguments}}]})
-            messages.append({"role": "tool", "tool_name": name, "content": json.dumps(data, default=str)})
-            # Safety answers must remain grounded in the forecast result. Some
-            # small local models ignore the tool result and emit a refusal, so
-            # do not give the model an opportunity to replace this assessment.
             return {
                 "user_query": user_query,
                 "tool_calls": calls,
                 "returned_data": tool_results,
                 "response": self._grounded_safety_response(data),
             }
+
         for _ in range(4):
-            message = self._chat(messages).get("message", {})
+            message = self._chat(messages, include_tools=True).get("message", {})
             messages.append(message)
             tool_calls = message.get("tool_calls", [])
             if not tool_calls:
                 response = message.get("content", "NOT AVAILABLE")
                 if safety_question and self._is_unsupported_refusal(response):
                     response = self._grounded_safety_response(tool_results[-1]["data"])
-                return {"user_query": user_query, "tool_calls": calls, "returned_data": tool_results, "response": response}
+                return {
+                    "user_query": user_query,
+                    "tool_calls": calls,
+                    "returned_data": tool_results,
+                    "response": response,
+                }
+
             for call in tool_calls:
+                call_id = call.get("id", "call_tool")
                 function = call.get("function", {})
-                name, arguments = function.get("name"), function.get("arguments", {})
+                name = function.get("name", "")
+                arguments = function.get("arguments", {})
                 if isinstance(arguments, str):
-                    arguments = json.loads(arguments)
+                    try:
+                        arguments = json.loads(arguments)
+                    except json.JSONDecodeError:
+                        arguments = {}
                 data = self.tools.execute(name, arguments)
                 calls.append({"tool": name, "arguments": arguments})
                 tool_results.append({"tool": name, "data": data})
-                messages.append({"role": "tool", "tool_name": name, "content": json.dumps(data, default=str)})
-        raise OllamaError("Ollama exceeded the maximum tool-call rounds")
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "name": name,
+                        "content": json.dumps(data, default=str),
+                    }
+                )
+
+        raise GroqError("Groq exceeded the maximum tool-call rounds")

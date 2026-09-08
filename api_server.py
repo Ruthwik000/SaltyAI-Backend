@@ -17,7 +17,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 from erddap_client import ERDDAPClient, ERDDAPConnectionError
 from fishing_zone import build_fishing_zone_data
-from ollama_agent import ERDDAPTools, OllamaAgent, OllamaError
+from groq_agent import ERDDAPTools, GroqAgent, GroqError
 from prediction_models import build_predictions
 from risk_features import build_72h_feature_dataset
 from severe_weather import build_severe_weather_data
@@ -532,15 +532,13 @@ class Handler(BaseHTTPRequestHandler):
                 f" Reply in {language}. Preserve technical values, units, dataset names, and safety warnings accurately."
             )
 
-            result = OllamaAgent(
+            result = GroqAgent(
                 ERDDAPTools(_client()),
-                # gemma3:4b has no tool-calling support in this Ollama build;
-                # qwen3:0.6b does, and the tool contract is what keeps every
-                # numeric answer grounded in a real ERDDAP call.
-                model=os.getenv("SALTY_OLLAMA_MODEL", "qwen3:0.6b"),
-                base_url=os.getenv("SALTY_OLLAMA_URL", "http://127.0.0.1:11434"),
-                mode=os.getenv("SALTY_AI_MODE", "live"),
-            ).answer(query, mode=str(payload.get("mode", "normal")), context=location_context + language_context)
+                model=os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
+                base_url=os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
+                api_key=os.getenv("GROQ_API_KEY", ""),
+                mode=os.getenv("SALTY_AI_MODE", "mock"),
+            ).answer(query, mode=str(payload.get("mode", "normal")), context=location_context)
             if parsed.path == "/api/ai/query":
                 return self._send(200, {
                     "response": result.get("response", "NOT AVAILABLE"),
@@ -549,7 +547,7 @@ class Handler(BaseHTTPRequestHandler):
                     "tool_calls": result.get("tool_calls", []),
                 })
             return self._send(200, result)
-        except (OllamaError, json.JSONDecodeError, ValueError) as exc:
+        except (GroqError, json.JSONDecodeError, ValueError) as exc:
             return self._send(503, {"error": str(exc), "status": "LLM NOT AVAILABLE"})
         except Exception as exc:
             return self._send(500, {"error": str(exc), "status": "NOT AVAILABLE"})

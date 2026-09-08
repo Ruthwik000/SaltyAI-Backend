@@ -72,7 +72,7 @@ flowchart LR
   N --> D[Root Python data API :8010]
   D --> E[ERDDAP client]
   D --> M[Risk, fishing, severe-weather and prediction modules]
-  D --> O[Ollama tool agent]
+  D --> O[Groq tool agent]
   N --> V[Voice gateway :8001]
   V --> S[STT / TTS providers]
   V --> D
@@ -156,12 +156,12 @@ Run on port `8010` by default. Implemented endpoints:
 | GET | `/api/severe-weather` | Metadata-driven severe-weather records |
 | GET | `/api/marine/point` | Point sample for the prototype marine dataset |
 | GET | `/api/fishing-zones` | Fishing-zone data builder |
-| POST | `/api/llm/chat` | Ollama-backed, allowlisted ERDDAP tool agent |
+| POST | `/api/llm/chat` | Groq-backed, allowlisted ERDDAP tool agent |
 | POST | `/api/ai/query` | Compatibility response shape for the voice gateway/UI |
 
 Core modules are `erddap_client.py`, `weather_forecast.py`, `risk_features.py`,
 `fishing_zone.py`, `severe_weather.py`, `prediction_models.py`,
-`geofencing.py`, `historical.py`, and `ollama_agent.py`.
+`geofencing.py`, `historical.py`, and `groq_agent.py`.
 
 The ERDDAP client validates metadata, variables, units, dimensions, bounding
 boxes, and time coverage before querying. Most data-query paths can use an

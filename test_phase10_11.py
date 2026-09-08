@@ -7,7 +7,7 @@ from erddap_client import ERDDAPClient
 from fishing_zone import build_fishing_zone_data
 from geofencing import point_inside_zone
 from historical import HistoricalResearcher
-from ollama_agent import ERDDAPTools, OllamaAgent
+from groq_agent import ERDDAPTools, GroqAgent
 from risk_features import build_72h_feature_dataset
 from severe_weather import build_severe_weather_data
 
@@ -37,8 +37,8 @@ class DemoClient(ERDDAPClient):
         return {"table": {"columnNames": ["time", "latitude", "longitude", *variables], "rows": [[start, 17.5, 83.5, *[1.0 for _ in variables]]]}}
 
 
-class DemoOllama(OllamaAgent):
-    def _chat(self, messages):
+class DemoGroq(GroqAgent):
+    def _chat(self, messages, include_tools=True):
         query = messages[1]["content"].lower()
         if messages[-1]["role"] != "tool":
             if "nearest potential" in query:
@@ -49,7 +49,7 @@ class DemoOllama(OllamaAgent):
                 call = {"name": "get_time_series", "arguments": {"dataset_id": "demo_marine", "variable": "SST", "bbox": [17.0, 18.5, 82.5, 84.5], "start": "2020-01-01T00:00:00Z", "end": "2020-01-02T00:00:00Z"}}
             else:
                 call = {"name": "get_forecast", "arguments": {"dataset_id": "demo_marine", "variables": ["wind", "wave"], "bbox": [17.0, 18.5, 82.5, 84.5], "start": "2020-01-01T00:00:00Z", "end": "2020-01-03T00:00:00Z"}}
-            return {"message": {"role": "assistant", "tool_calls": [{"function": call}]}}
+            return {"message": {"role": "assistant", "tool_calls": [{"id": "call_mock", "type": "function", "function": call}]}}
         data = json.loads(messages[-1]["content"])
         value = data.get("records", [{}])[0].get("SST", data.get("records", [{}])[0].get("value", "NOT AVAILABLE"))
         return {"message": {"role": "assistant", "content": f"Based only on returned data: {value}"}}
@@ -67,7 +67,7 @@ def main():
     polygon = {"type": "Polygon", "coordinates": [[[83, 17], [84, 17], [84, 18], [83, 18], [83, 17]]]}
     assert point_inside_zone((83.5, 17.5), polygon)
 
-    agent = DemoOllama(ERDDAPTools(client))
+    agent = DemoGroq(ERDDAPTools(client))
     queries = ["Where is the nearest Potential Fishing Zone today?", "What is the SST near Visakhapatnam?", "What are the wind and wave conditions for the next 3 days?", "Which region has high chlorophyll?", "Show ocean conditions for the next 72 hours.", "Compare SST between two regions.", "Is the sea condition expected to worsen tomorrow?", "When is the lowest-risk forecast window?"]
     for query in queries:
         result = agent.answer(query)

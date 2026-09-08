@@ -13,6 +13,7 @@ from app.models.schemas import Location
 @pytest.mark.asyncio
 async def test_backend_client_query_success(monkeypatch):
     """Verify successful query to Main SALTY AI Backend."""
+    monkeypatch.setattr(settings, "AI_PROVIDER", "backend")
     monkeypatch.setattr(settings, "CALL_AGENT_TEST_MODE", False)
     client = AIBackendClient(base_url="http://mock-ai-backend:8080", max_retries=1)
 
@@ -45,6 +46,7 @@ async def test_backend_client_query_success(monkeypatch):
 @pytest.mark.asyncio
 async def test_backend_client_retry_and_fallback(monkeypatch):
     """Verify client retries on 503 and returns spoken fallback on ultimate failure."""
+    monkeypatch.setattr(settings, "AI_PROVIDER", "backend")
     monkeypatch.setattr(settings, "CALL_AGENT_TEST_MODE", False)
     client = AIBackendClient(
         base_url="http://mock-ai-backend:8080",

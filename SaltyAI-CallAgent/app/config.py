@@ -37,14 +37,9 @@ class Settings(BaseSettings):
     EXOTEL_CALL_TIMEOUT_SECONDS: int = Field(default=30, description="Seconds to let the destination phone ring")
     EXOTEL_CALL_TIME_LIMIT_SECONDS: int = Field(default=3600, description="Maximum connected call duration")
 
-    # Local voice pipeline. Ollama is the default brain; local STT/TTS keep
-    # phone audio off third-party speech services.
-    AI_PROVIDER: str = Field(default="ollama", description="Voice reasoning provider: ollama or backend")
+    # Voice pipeline reasoning configuration (Groq AI or main backend)
+    AI_PROVIDER: str = Field(default="groq", description="Voice reasoning provider: groq or backend")
     VOICE_PROVIDER: str = Field(default="sarvam", description="Speech provider: sarvam or local")
-    OLLAMA_URL: str = Field(default="http://127.0.0.1:11434", description="Local Ollama URL")
-    OLLAMA_MODEL: str = Field(default="gemma3:4b", description="Ollama model used for voice reasoning")
-    OLLAMA_TIMEOUT_SECONDS: float = Field(default=30.0, description="Ollama request timeout")
-    OLLAMA_MAX_TOKENS: int = Field(default=100, description="Maximum spoken response tokens")
     LOCAL_STT_MODEL: str = Field(default="base", description="faster-whisper model name or local path")
     LOCAL_STT_DEVICE: str = Field(default="cpu", description="faster-whisper device")
     LOCAL_STT_COMPUTE_TYPE: str = Field(default="int8", description="faster-whisper compute type")
@@ -52,10 +47,10 @@ class Settings(BaseSettings):
     LOCAL_TTS_CONFIG_PATH: str = Field(default="", description="Optional Piper .onnx.json path")
     LOCAL_TTS_EXECUTABLE: str = Field(default="piper", description="Piper executable")
 
-    # Development Test Mode Flag & Groq AI Configuration
+    # Groq AI Configuration
     CALL_AGENT_TEST_MODE: bool = Field(default=False, description="Development test mode flag for testing voice pipeline with fast LLM intelligence")
-    GROQ_API_KEY: str = Field(default="", description="Groq API key for test mode intelligence")
-    GROQ_MODEL: str = Field(default="openai/gpt-oss-20b", description="Groq model name for test mode")
+    GROQ_API_KEY: str = Field(default="", description="Groq API key for voice reasoning")
+    GROQ_MODEL: str = Field(default="openai/gpt-oss-20b", description="Groq model name")
     GROQ_BASE_URL: str = Field(default="https://api.groq.com/openai/v1", description="Groq API base URL")
     LLM_TIMEOUT_SECONDS: float = Field(default=8.0, description="Timeout for LLM API requests in seconds")
     LLM_MAX_RETRIES: int = Field(default=2, description="Maximum retry count for LLM API requests")

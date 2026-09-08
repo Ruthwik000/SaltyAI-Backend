@@ -66,12 +66,15 @@ class AIBackendClient:
         Returns:
             AIQueryResponse with synthesized answer text and priority.
         """
-        if settings.AI_PROVIDER.lower() == "ollama":
-            from app.ai.ollama_client import ollama_client
-            return await ollama_client.query(
-                call_id=call_id, phone_number=phone_number, message=message,
+        if settings.AI_PROVIDER.lower() == "groq" or settings.CALL_AGENT_TEST_MODE:
+            from app.ai.groq_client import groq_client
+            return await groq_client.query(
+                call_id=call_id,
+                phone_number=phone_number,
+                message=message,
                 language=language or settings.DEFAULT_FALLBACK_LANGUAGE,
-                conversation_history=conversation_history or [], location=location,
+                conversation_history=conversation_history or [],
+                location=location,
             )
 
         request_payload = AIQueryRequest(
@@ -82,19 +85,6 @@ class AIBackendClient:
             conversation_history=conversation_history or [],
             location=location,
         )
-
-        # If CALL_AGENT_TEST_MODE is enabled, utilize the real Groq test intelligence client
-        if settings.CALL_AGENT_TEST_MODE:
-            logger.info(f"[GROQ TEST MODE ACTIVE] Processing turn via real Groq intelligence for call {call_id}")
-            from app.ai.test_groq_client import groq_test_client
-            return await groq_test_client.query(
-                call_id=call_id,
-                phone_number=phone_number,
-                message=message,
-                language=language or settings.DEFAULT_FALLBACK_LANGUAGE,
-                conversation_history=conversation_history or [],
-                location=location,
-            )
 
 
 

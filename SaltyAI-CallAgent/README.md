@@ -36,11 +36,11 @@ Fisherman's Basic Phone (PSTN/2G)
 │     - Multi-turn context & Bounded session history          │
 │     - Free-form dialogue (no rigid IVR forms or slot order) │
 │                                                             │
-│  5. Main AI Backend Connector (`app/ai/backend_client.py`)  │
-│     - Async HTTPX with retries, backoff, and fallbacks      │
-│     - Communicates with LangGraph Marine Reasoning Backend  │
-│     - Supports Groq in Development Test Mode                │
-
+│  5. AI Intelligence Engine (`app/ai/groq_client.py`)        │
+│     - Ultra-low-latency Groq API (`openai/gpt-oss-20b`)     │
+│     - Async HTTPX with persistent connection pooling        │
+│     - Multilingual voice script matching & speech cleanup   │
+│     - Fallback spoken responses on rate limits / timeouts   │
 │                                                             │
 │  6. Text-to-Speech (`app/speech/tts.py`)                    │
 │     - Real Sarvam Bulbul API (`POST /text-to-speech`)       │
@@ -49,7 +49,7 @@ Fisherman's Basic Phone (PSTN/2G)
             │
             ▼
 Main SALTY AI Backend (`POST /api/ai/query` & `POST /api/emergency`)
-(LangGraph + Marine / PFZ / Rescue Agents)
+(Marine / PFZ / Rescue Data Layer)
 ```
 
 ---
@@ -79,6 +79,7 @@ call-agent/
 │   │   └── tts.py               # Real Sarvam Bulbul TTS client
 │   ├── ai/
 │   │   ├── __init__.py
+│   │   ├── groq_client.py       # Production Groq API voice reasoning client
 │   │   └── backend_client.py    # Main SALTY AI backend connector (HTTPX)
 │   ├── conversation/
 │   │   ├── __init__.py
@@ -102,21 +103,25 @@ Create a `.env` file in `call-agent/` (copy from `.env.example`):
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | `HOST` | `0.0.0.0` | Server bind host |
-| `PORT` | `8000` | Server bind port |
+| `PORT` | `8001` | Server bind port |
 | `LOG_LEVEL` | `INFO` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `EXOTEL_API_KEY` | - | Exotel API Key from Exotel Dashboard |
 | `EXOTEL_API_TOKEN` | - | Exotel API Token |
 | `EXOTEL_ACCOUNT_SID` | - | Exotel Account SID |
 | `EXOTEL_SUB_DOMAIN` | `api.exotel.com` | Exotel API Subdomain |
+| `AI_PROVIDER` | `groq` | Voice reasoning provider (`groq` or `backend`) |
+| `GROQ_API_KEY` | - | Groq API Key |
+| `GROQ_MODEL` | `openai/gpt-oss-20b` | Groq model for conversational reasoning |
+| `GROQ_BASE_URL` | `https://api.groq.com/openai/v1` | Groq API Base URL |
+| `LLM_TIMEOUT_SECONDS` | `8.0` | Timeout for Groq API requests |
+| `LLM_MAX_RETRIES` | `2` | Maximum retry attempts for Groq API |
 | `SARVAM_API_KEY` | - | Sarvam AI API subscription key |
 | `SARVAM_BASE_URL` | `https://api.sarvam.ai`| Sarvam API base URL |
 | `SARVAM_STT_MODEL`| `saaras:v3` | Sarvam Saaras model version |
 | `SARVAM_TTS_MODEL`| `bulbul:v3` | Sarvam Bulbul model version |
-| `SARVAM_DEFAULT_LANGUAGE_CODE` | `ta-IN` | Default regional language (Tamil) |
+| `SARVAM_DEFAULT_LANGUAGE_CODE` | `en-IN` | Default regional language |
 | `SARVAM_DEFAULT_SPEAKER` | `shubh` | Default voice speaker |
 | `AI_BACKEND_URL` | `http://127.0.0.1:8010`| Main SALTY AI backend URL (`POST /api/ai/query`) |
-| `AI_BACKEND_TIMEOUT_SECONDS` | `10.0` | HTTP timeout for AI backend queries |
-| `AI_BACKEND_MAX_RETRIES` | `2` | Maximum retry attempts for AI backend |
 | `AUDIO_SAMPLE_RATE` | `8000` | Telephony audio sample rate (Hz) |
 | `VAD_RMS_THRESHOLD` | `350` | RMS threshold for speech detection (marine noise) |
 | `VAD_MIN_SPEECH_MS` | `250` | Minimum speech duration before speech start |
