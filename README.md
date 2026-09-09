@@ -147,27 +147,51 @@ sequenceDiagram
 
 ### Root Python data API (`api_server.py`)
 
-Run on port `8010` by default. Implemented endpoints:
+Runs on port `8010`. Every endpoint that exists:
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
-| GET | `/api/health` | API health and prototype/live mode |
-| GET | `/api/predictions` | Strict real-data marine-risk and fishing-window predictions |
-| GET | `/api/severe-weather` | Metadata-driven severe-weather records |
-| GET | `/api/marine/point` | Point sample for the prototype marine dataset |
-| GET | `/api/fishing-zones` | Fishing-zone data builder |
-| POST | `/api/llm/chat` | Groq-backed, allowlisted ERDDAP tool agent |
-| POST | `/api/ai/query` | Compatibility response shape for the voice gateway/UI |
+| GET | `/api/health` | API health |
+| GET | `/api/alerts` | INCOIS High Wave and Swell Surge advisories in force |
+| GET | `/api/research/catalog` | ERDDAP dataset catalogue |
+| GET | `/api/research/timeseries` | ERDDAP time series for a dataset and point |
+| GET | `/api/research/frames` | ERDDAP frame list for animation |
+| GET | `/api/research/frame.png` | One rendered frame |
+| POST | `/api/llm/chat` | Groq tool-calling agent (this is the chat agent) |
+| POST | `/api/ai/query` | Same agent, response shape the voice gateway expects |
 
-Core modules are `erddap_client.py`, `weather_forecast.py`, `risk_features.py`,
-`fishing_zone.py`, `severe_weather.py`, `prediction_models.py`,
-`geofencing.py`, `historical.py`, and `groq_agent.py`.
+There is no synthetic or prototype mode. A source that cannot answer returns
+`NOT AVAILABLE` and the agent says so; nothing is filled in.
 
-The ERDDAP client validates metadata, variables, units, dimensions, bounding
-boxes, and time coverage before querying. Most data-query paths can use an
-explicitly tagged synthetic fallback for prototype operation. Predictions
-deliberately disable that fallback and return `NOT AVAILABLE` when live inputs
-cannot be retrieved.
+### Data client modules
+
+| Module | Serves | Source |
+| --- | --- | --- |
+| `thredds_client.py` | waves, swell, period, wind, current, SST | INCOIS Ocean State Forecast (THREDDS NCSS) |
+| `pfz_client.py` | PFZ advisories, sector species, EEZ boundary | INCOIS GeoServer WFS |
+| `alerts_client.py` | High Wave Alerts, Swell Surge Advisories | INCOIS mobile advisory API |
+| `tides_client.py` | high and low water times | Open-Meteo Marine |
+| `weather_client.py` | thunderstorms, lightning risk, air weather | Open-Meteo Forecast |
+| `ocean_color_client.py` | chlorophyll, SST, SST anomaly and their trend | NOAA CoastWatch ERDDAP |
+| `route_client.py` | track check, hazard summary | composed from the above |
+| `erddap_client.py` | catalogue and archive queries | INCOIS ERDDAP |
+| `prediction_models.py` | the risk score and fishing-window model | no network |
+| `groq_agent.py` | the agent: 17 tools, mode voices, honesty guards | Groq |
+
+`ocean_color_client.py` reads NOAA rather than INCOIS for a reason recorded in
+its docstring: INCOIS ERDDAP's newest chlorophyll pixel is from 2020 and its
+own ocean-colour archive stops in 2006, so it cannot answer "where is the
+water productive today".
+
+### Checking the data sources
+
+```bash
+python test_sources.py            # every live source, pass/fail with a real value
+python test_sources.py --only tides
+```
+
+Run it before a demo. It hits the real services, asserts a real value came
+back, and never falls back — a source that is down reports FAIL.
 
 ### Voice gateway API
 
@@ -180,20 +204,19 @@ The gateway calls the root API through `app/ai/backend_client.py` and forwards
 detected emergencies through `app/api/emergency.py`. It is a separate service,
 not a module inside the Next.js server.
 
-## Data and prototype boundaries
+## Data boundaries
 
-- INCOIS is the source of truth for the official OSF map and verified forecast
-  layers.
-- ERDDAP is used for catalogue discovery, metadata, point/region/time-series,
-  historical, and forecast retrieval.
-- Dashboard fixtures, local workflow estimates, and UI fallbacks are demo
-  data; the UI displays source badges or explanatory text for them.
-- No production fleet telemetry, Coast Guard dispatch, VHF broadcast, offline
-  map cache, PFZ WebGIS service integration, or chlorophyll/Kd490 controlled
-  layer is implemented in this repository.
-- The custom MapLibre map remains in `ui2/components/map/ocean-map.tsx` for
-  research/operations use; the official iframe remains the source of truth for
-  the official forecast view.
+- INCOIS is the source of truth for sea state, PFZ advisories, official
+  advisories and the EEZ boundary.
+- Tides, thunderstorms and air weather come from Open-Meteo; chlorophyll and
+  SST trends come from NOAA CoastWatch. Neither is an INCOIS product, and
+  every answer built on them says which source it came from.
+- Not available, and the agent must say so rather than improvise: market
+  prices; gazetted restricted or no-fishing areas, for which India publishes
+  no machine-readable feed; and named-cyclone bulletins, which IMD publishes
+  as pages, not as an API.
+- `check_route` checks the water along a track. It is not navigation: it knows
+  nothing about shoals, traffic, fuel or the boat.
 
 ## Run locally
 

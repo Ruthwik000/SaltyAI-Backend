@@ -1,2 +1,1 @@
-shapely>=2.0
-geojson>=3.0
+python-dotenv>=1.0

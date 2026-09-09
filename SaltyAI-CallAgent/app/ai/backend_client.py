@@ -1,6 +1,28 @@
 """
-Main SALTY AI Intelligence Backend Connector.
-Communicates with teammate's LangGraph backend via REST contract.
+Connector to the SALTY marine reasoning agent.
+
+A phone call reaches the SAME agent the web console uses: POST /api/ai/query on
+the data API, which runs the full tool-calling agent with all seventeen marine
+tools - INCOIS sea state, PFZ advisories, tides, thunderstorms, the EEZ
+boundary, satellite productivity. The caller therefore hears the same verified
+numbers a person on the website would read, phrased for speech.
+
+Two things were quietly stopping that from working:
+
+  * The default timeout was ten seconds. A real answer calls INCOIS THREDDS,
+    which steps seaward past land cells, and routinely needs fifteen to thirty.
+    Every call therefore timed out, retried, timed out again, and the caller
+    heard "sorry, I'm having trouble connecting" while the backend was up and
+    answering perfectly.
+  * The payload spelled fields the API did not read - conversation_history and
+    location.latitude - so even a call that got through arrived with no memory
+    and no position, and the tools answered about the wrong coast.
+
+There is NO reasoning fallback when the agent cannot be reached. A toolless
+model answering a marine question from memory is exactly the failure this
+project exists to avoid: a remembered wave height sounds identical to a
+measured one, and the caller is at sea. When the agent is unreachable the
+caller is told so, in their own language, and pointed at the local bulletin.
 """
 
 import time
@@ -51,6 +73,7 @@ class AIBackendClient:
         language: str = "ta-IN",
         conversation_history: Optional[List[Dict[str, Any]]] = None,
         location: Optional[Location] = None,
+        state: Optional[str] = None,
     ) -> AIQueryResponse:
         """
         Send caller query and multi-turn context to Main SALTY AI Backend.
@@ -66,7 +89,15 @@ class AIBackendClient:
         Returns:
             AIQueryResponse with synthesized answer text and priority.
         """
-        if settings.AI_PROVIDER.lower() == "groq" or settings.CALL_AGENT_TEST_MODE:
+        # CALL_AGENT_TEST_MODE is a development flag for exercising the audio
+        # pipeline without the data API running. It is the ONLY path to the
+        # toolless model, and it must never be on in a real deployment: that
+        # model has no marine data and will answer from memory.
+        if settings.CALL_AGENT_TEST_MODE:
+            logger.warning(
+                "CALL_AGENT_TEST_MODE is on: answering from the toolless model, "
+                "with no live marine data. Do not use this on a real call."
+            )
             from app.ai.groq_client import groq_client
             return await groq_client.query(
                 call_id=call_id,
@@ -76,6 +107,12 @@ class AIBackendClient:
                 conversation_history=conversation_history or [],
                 location=location,
             )
+
+        # The caller's coastal state, resolved from the harbour they named, so
+        # the advisory feed can match. Copied rather than mutated: the session
+        # owns that Location object.
+        if location is not None and state and not location.state:
+            location = location.model_copy(update={"state": state})
 
         request_payload = AIQueryRequest(
             call_id=call_id,
@@ -96,6 +133,14 @@ class AIBackendClient:
         }
 
         payload_dict = request_payload.model_dump(mode="json")
+        # The agent reads "history" and "query"; this client's schema calls the
+        # same things "conversation_history" and "message". Send both spellings
+        # rather than depend on which side is updated first - the cost is a few
+        # bytes, and the cost of getting it wrong is a caller whose follow-up
+        # question means nothing.
+        payload_dict["history"] = payload_dict.get("conversation_history") or []
+        payload_dict["query"] = message
+
         start_time = time.perf_counter()
 
 
@@ -152,8 +197,18 @@ class AIBackendClient:
                 logger.error(f"Unexpected error calling AI Backend: {exc} | call_id: {call_id}", exc_info=True)
                 break
 
-        # Return graceful spoken fallback response in caller's language
-        fallback_text = FALLBACK_SPOKEN_MESSAGES.get(language, FALLBACK_SPOKEN_MESSAGES["ta-IN"])
+        # Every attempt failed. Say so plainly. The one thing this must not do
+        # is hand the question to a model with no data and read out whatever it
+        # invents.
+        logger.error(
+            f"Marine agent unreachable at {self.query_endpoint} after "
+            f"{self.max_retries + 1} attempt(s) | call_id: {call_id}"
+        )
+        fallback_text = FALLBACK_SPOKEN_MESSAGES.get(
+            language,
+            FALLBACK_SPOKEN_MESSAGES.get(settings.DEFAULT_FALLBACK_LANGUAGE,
+                                         FALLBACK_SPOKEN_MESSAGES["en-IN"]),
+        )
         return AIQueryResponse(
             response=fallback_text,
             language=language,

@@ -1,8 +1,10 @@
 """Small local HTTP adapter for the SALTY Python data layer.
 
-Run with ``python3 api_server.py``. The default prototype mode uses the
-existing ERDDAP client's explicitly labelled synthetic fallback when the
-remote service is unavailable. Set ``SALTY_LIVE=1`` to use the live catalog.
+Run with ``python3 api_server.py`` (or ``py api_server.py`` on Windows).
+
+There is no demo, prototype or synthetic mode. Every endpoint either returns
+data that came off a real service or reports NOT AVAILABLE. Credentials and
+settings come from a .env file beside this one.
 """
 
 from __future__ import annotations
@@ -10,109 +12,45 @@ from __future__ import annotations
 import json
 import math
 import os
+import sys
+import traceback
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+from alerts_client import AlertsError, alerts_for
 from erddap_client import ERDDAPClient, ERDDAPConnectionError
-from fishing_zone import build_fishing_zone_data
 from groq_agent import ERDDAPTools, GroqAgent, GroqError
+from ports import resolve as resolve_port
 from prediction_models import build_predictions
 from risk_features import build_72h_feature_dataset
-from severe_weather import build_severe_weather_data
 
 
 BBOX = (17.0, 18.5, 82.5, 84.5)
-SYNTHETIC_METADATA = {
-    "time_coverage": {"time_coverage_start": "2020-01-01T00:00:00Z", "time_coverage_end": "2030-01-01T00:00:00Z"},
-    "dimensions": ["time", "latitude", "longitude"],
-    "variables": [
-        {"name": "SST", "units": "degC", "attributes": {"standard_name": "sea_surface_temperature"}},
-        {"name": "CHL", "units": "mg/m3", "attributes": {"long_name": "chlorophyll a"}},
-        {"name": "wind_speed", "units": "m/s", "attributes": {"long_name": "wind speed"}},
-        {"name": "wave_height", "units": "m", "attributes": {"long_name": "significant wave height"}},
-        {"name": "swell_height", "units": "m", "attributes": {"long_name": "swell height"}},
-        {"name": "current_speed", "units": "m/s", "attributes": {"long_name": "ocean current speed"}},
-        {"name": "rainfall", "units": "mm", "attributes": {"long_name": "rainfall"}},
-    ],
-}
-
-
-class PrototypeClient(ERDDAPClient):
-    """Client that exercises the normal query fallback without remote I/O."""
-
-    def get_dataset_metadata(self, dataset_id):
-        return {**SYNTHETIC_METADATA, "dataset_id": dataset_id, "title": "SYNTHETIC TEST DATA — prototype marine feed"}
-
-    def list_datasets(self):
-        return [{"dataset_id": "prototype_marine", "title": "SYNTHETIC TEST DATA — prototype marine feed"}]
-
-    def _query(self, dataset_id, expression):
-        raise ERDDAPConnectionError("prototype backend has no remote feed")
 
 
 def _client() -> ERDDAPClient:
-    # Always try the real INCOIS ERDDAP first. SALTY_LIVE=1 disables the
-    # per-request synthetic fallback entirely (fail loudly instead of ever
-    # fabricating a value); SALTY_PROTOTYPE=1 opts back into the old
-    # always-fake client for offline development.
-    if os.getenv("SALTY_PROTOTYPE") == "1":
-        return PrototypeClient(synthetic_fallback=True)
-    return ERDDAPClient(timeout=20, verify_ssl=False, synthetic_fallback=os.getenv("SALTY_LIVE") != "1")
+    # ERDDAPClient can no longer fabricate: the synthetic-row generator was
+    # removed outright rather than left behind a flag someone could flip.
+    return ERDDAPClient(timeout=20, verify_ssl=False)
 
 
 def _prediction_client() -> ERDDAPClient:
-    """Prediction inputs must be real; never use the prototype fallback."""
-    return ERDDAPClient(timeout=30, synthetic_fallback=False)
+    """Prediction inputs must be real."""
+    return ERDDAPClient(timeout=30)
 
 
 def _datasets(client: ERDDAPClient):
-    if isinstance(client, PrototypeClient):
-        return [{"dataset_id": "prototype_marine", "title": "SYNTHETIC TEST DATA — prototype marine feed", "metadata": SYNTHETIC_METADATA}]
     from weather_forecast import load_datasets
-    try:
-        return load_datasets(client)
-    except Exception:
-        # Keep the local API usable when INCOIS is temporarily unreachable.
-        # Query records remain explicitly tagged as synthetic by ERDDAPClient.
-        return _datasets(PrototypeClient(synthetic_fallback=True))
 
-
-def _research_series(payload: dict) -> dict:
-    """Return a labelled local series for the chart fallback contract."""
-    dataset_id = str(payload.get("datasetId", "unknown"))
-    variable = str(payload.get("variable", "unknown"))
-    region = payload.get("region") or BBOX
-    start = str(payload.get("start", "2023-01-01"))[:7]
-    end = str(payload.get("end", "2026-01-01"))[:7]
-    year, month = (int(part) for part in start.split("-"))
-    end_year, end_month = (int(part) for part in end.split("-"))
-    points = []
-    while (year, month) <= (end_year, end_month) and len(points) < 480:
-        value = 28.2 + 1.8 * math.sin((month - 1) / 12 * math.tau) + (year - int(start[:4])) * 0.02
-        points.append({"t": f"{year:04d}-{month:02d}-01", "value": round(value, 3)})
-        month += 1
-        if month == 13:
-            month, year = 1, year + 1
-    values = [point["value"] for point in points]
-    mean = sum(values) / len(values) if values else 0
-    baseline = [{"t": point["t"], "value": round(mean, 3)} for point in points]
-    return {
-        "synthetic": True,
-        "datasetId": dataset_id,
-        "variable": variable,
-        "unit": "°C" if "sst" in variable.lower() or "temp" in variable.lower() else "",
-        "region": region,
-        "start": points[0]["t"] if points else start,
-        "end": points[-1]["t"] if points else end,
-        "points": points,
-        "baseline": baseline,
-        "climatology": [{"month": str(index + 1), "mean": round(mean, 3)} for index in range(12)],
-        "histogram": [],
-        "stats": {"count": len(values), "mean": round(mean, 3), "min": round(min(values), 3) if values else 0, "max": round(max(values), 3) if values else 0, "stdDev": 0, "trendPerDecade": 0, "anomalyMean": 0},
-    }
-
+    return load_datasets(client)
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +95,7 @@ TIME_NAMES = {"time", "t"}
 
 def _real_client() -> ERDDAPClient:
     """A client that only ever returns live INCOIS data, never synthetic rows."""
-    return ERDDAPClient(timeout=45, verify_ssl=False, synthetic_fallback=False)
+    return ERDDAPClient(timeout=45, verify_ssl=False)
 
 
 _metadata_cache: dict[str, tuple[float, dict]] = {}
@@ -433,12 +371,20 @@ def _research_frame_png(dataset_id: str, cfg: dict, time_value: str) -> bytes:
 class Handler(BaseHTTPRequestHandler):
     def _send(self, status: int, payload: dict):
         body = json.dumps(payload, default=str).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            # The browser hung up before we answered. Routine: the UI aborts
+            # in-flight requests on navigation and on its own 6s timeout.
+            # Without this the do_GET/do_POST error handler tries to send a
+            # 500 down the same dead socket, raises a second time, and dumps
+            # a full traceback per abandoned request.
+            self.close_connection = True
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -453,19 +399,15 @@ class Handler(BaseHTTPRequestHandler):
         client = _client()
         try:
             if parsed.path == "/api/health":
-                mode = "prototype" if os.getenv("SALTY_PROTOTYPE") == "1" else ("live-strict" if os.getenv("SALTY_LIVE") == "1" else "live")
-                return self._send(200, {"ok": True, "service": "salty-data-layer", "mode": mode})
-            if parsed.path == "/api/predictions":
-                prediction_client = _prediction_client()
-                features = build_72h_feature_dataset(prediction_client, _datasets(prediction_client), bbox=BBOX)
-                return self._send(200, build_predictions(features))
-            if parsed.path == "/api/severe-weather":
-                return self._send(200, build_severe_weather_data(client, _datasets(client), BBOX))
-            if parsed.path == "/api/marine/point":
-                response = client.get_point_data("prototype_marine", "SST", "2020-01-01T00:00:00Z", 17.6868, 83.2185)
-                return self._send(200, {"synthetic": response.get("synthetic", False), "records": response.get("table", {}).get("rows", [])})
-            if parsed.path == "/api/fishing-zones":
-                return self._send(200, build_fishing_zone_data(client, _datasets(client), BBOX))
+                return self._send(200, {"ok": True, "service": "salty-data-layer", "mode": "live"})
+            if parsed.path == "/api/alerts":
+                place = (query.get("place") or [None])[0]
+                state = (query.get("state") or [None])[0]
+                try:
+                    return self._send(200, alerts_for(place, state, limit=10))
+                except AlertsError as exc:
+                    return self._send(502, {"error": str(exc), "status": "NOT AVAILABLE"})
+
             if parsed.path == "/api/research/catalog":
                 return self._send(200, {"datasets": _get_catalog()})
             if parsed.path == "/api/research/timeseries":
@@ -494,21 +436,37 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.send_header("Cache-Control", "public, max-age=3600")
                 self.end_headers()
-                self.wfile.write(png)
+                try:
+                    self.wfile.write(png)
+                except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                    # Frame stepping cancels in-flight images constantly.
+                    self.close_connection = True
                 return
             return self._send(404, {"error": "NOT FOUND"})
         except Exception as exc:
+            traceback.print_exc()
             return self._send(500, {"error": str(exc), "status": "NOT AVAILABLE"})
+
+    # The phone agent speaks BCP-47 ("te-IN"); the reasoning agent is told to
+    # reply in a language by NAME. Passing the code straight through produced
+    # the instruction "Reply in te-IN", which the model read as English.
+    _SPOKEN_LANGUAGE = {
+        "te": "Telugu", "hi": "Hindi", "ta": "Tamil", "ml": "Malayalam",
+        "kn": "Kannada", "bn": "Bengali", "mr": "Marathi", "gu": "Gujarati",
+        "or": "Odia", "pa": "Punjabi", "en": "English",
+    }
+
+    @classmethod
+    def _language_name(cls, value: str) -> str:
+        """"te-IN" -> "Telugu". A name already given is passed through."""
+        text = str(value or "").strip()
+        if not text:
+            return "English"
+        base = text.replace("_", "-").split("-")[0].lower()
+        return cls._SPOKEN_LANGUAGE.get(base, text)
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        if parsed.path == "/api/research/series":
-            try:
-                length = int(self.headers.get("Content-Length", "0"))
-                payload = json.loads(self.rfile.read(length) or b"{}")
-                return self._send(200, _research_series(payload))
-            except (json.JSONDecodeError, ValueError) as exc:
-                return self._send(400, {"error": str(exc)})
         if parsed.path not in ("/api/llm/chat", "/api/ai/query"):
             return self._send(404, {"error": "NOT FOUND"})
         try:
@@ -519,41 +477,103 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "query is required"})
             if len(query) > 4000:
                 return self._send(413, {"error": "query is too long"})
+            # Prior turns from the client, so follow-ups have context. The web
+            # console sends "history"; the phone agent sends
+            # "conversation_history". Reading only the first meant every call
+            # started from nothing and "what about tomorrow" meant nothing.
+            history = payload.get("history")
+            if not isinstance(history, list):
+                history = payload.get("conversation_history")
+            if not isinstance(history, list):
+                history = []
+            history = [turn for turn in history if isinstance(turn, dict)][-16:]
             location = payload.get("location")
-            language = str(payload.get("language", "English")).strip() or "English"
+            requested_language = str(payload.get("language", "English")).strip()
+            language = self._language_name(requested_language)
             location_context = ""
+            bbox = None
+            call_lat = call_lon = None
+            call_place = call_state = None
             if isinstance(location, dict):
                 name = str(location.get("name", "")).strip()
+                # The console sends lat/lon; the phone agent's Location model
+                # spells them out. Accept both, or a caller's position is
+                # dropped and every tool answers about Visakhapatnam. A key
+                # that is present but null must fall through too.
                 lat = location.get("lat")
+                if lat is None:
+                    lat = location.get("latitude")
                 lon = location.get("lon")
-                if name and isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
-                    location_context = f" The selected operating location is {name} ({lat}, {lon})."
+                if lon is None:
+                    lon = location.get("longitude")
+                if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+                    where = name or f"{lat:.3f}, {lon:.3f}"
+                    location_context = f" The selected operating location is {where} ({lat}, {lon})."
+                    # The safety tool otherwise defaults to Visakhapatnam, which
+                    # would answer a Kochi skipper about the wrong coast. Give it
+                    # the caller's own water, shaped like VISAKHAPATNAM_BBOX.
+                    bbox = [lat - 0.75, lat + 0.75, lon - 1.0, lon + 1.0]
+                    call_lat, call_lon = float(lat), float(lon)
+                    # Only a REAL district name goes to the advisory feed; it
+                    # matches on district, and a placeholder would match nothing
+                    # while looking like a lookup that found nothing.
+                    call_place = name or None
+                    call_state = str(location.get("state") or "").strip() or None
             language_context = (
                 f" Reply in {language}. Preserve technical values, units, dataset names, and safety warnings accurately."
             )
 
+            # A phone call is always the fisherman voice, tightened for speech:
+            # the answer goes straight into a text-to-speech engine and out of a
+            # handset, where a markdown table is unreadable noise.
+            mode = str(payload.get("mode", "normal"))
+            if parsed.path == "/api/ai/query":
+                mode = "voice"
+
             result = GroqAgent(
-                ERDDAPTools(_client()),
+                ERDDAPTools(_client(), latitude=call_lat, longitude=call_lon,
+                            place=call_place, state=call_state),
                 model=os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
                 base_url=os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
                 api_key=os.getenv("GROQ_API_KEY", ""),
-                mode=os.getenv("SALTY_AI_MODE", "mock"),
-            ).answer(query, mode=str(payload.get("mode", "normal")), context=location_context)
+            ).answer(
+                query,
+                mode=mode,
+                # language_context was previously built and dropped, which left
+                # every reply in English regardless of what was asked.
+                context=location_context + language_context,
+                bbox=bbox,
+                language=language,
+                history=history,
+            )
+            for item in result.get("returned_data", []):
+                mark = "data" if item.get("usable") else "NO DATA"
+                print(f"  tool {item.get('tool')}: {mark}", file=sys.stderr, flush=True)
             if parsed.path == "/api/ai/query":
                 return self._send(200, {
                     "response": result.get("response", "NOT AVAILABLE"),
-                    "language": payload.get("language", "te-IN"),
+                    # Echo the code the caller sent, not the language name:
+                    # the phone agent hands it straight to the speech engine.
+                    "language": requested_language or "te-IN",
                     "priority": "emergency" if any(term in query.lower() for term in ("sos", "救", "emergency", "drowning", "help")) else "normal",
                     "tool_calls": result.get("tool_calls", []),
                 })
             return self._send(200, result)
         except (GroqError, json.JSONDecodeError, ValueError) as exc:
+            print(f"  chat failed: {exc}", file=sys.stderr, flush=True)
             return self._send(503, {"error": str(exc), "status": "LLM NOT AVAILABLE"})
         except Exception as exc:
+            traceback.print_exc()
             return self._send(500, {"error": str(exc), "status": "NOT AVAILABLE"})
 
     def log_message(self, format, *args):
-        return
+        """One line per request.
+
+        The default handler logs are noisy, but silencing them entirely left
+        the console blank while requests failed, with nothing to look at.
+        """
+        sys.stderr.write(f"{datetime.now():%H:%M:%S}  {self.command} {self.path[:110]}\n")
+        sys.stderr.flush()
 
 
 if __name__ == "__main__":

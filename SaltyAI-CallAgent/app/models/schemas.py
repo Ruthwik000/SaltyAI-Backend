@@ -17,6 +17,9 @@ class Location(BaseModel):
     latitude: Optional[float] = Field(default=None, description="Latitude coordinate")
     longitude: Optional[float] = Field(default=None, description="Longitude coordinate")
     name: Optional[str] = Field(default=None, description="Location name or landmark, e.g. Chennai Coast")
+    # The INCOIS advisory feed matches on district and STATE. Without this the
+    # High Wave Alert for the caller's own coast is never found.
+    state: Optional[str] = Field(default=None, description="Coastal state, e.g. Andhra Pradesh")
     accuracy: Optional[float] = Field(default=None, description="Accuracy radius in meters")
 
 

@@ -27,7 +27,7 @@ def test_exotel_status_is_safe_and_reports_configuration(mocker):
 
 
 @pytest.mark.anyio
-async def test_outbound_call_uses_exotel_connect_api(respx, mocker):
+async def test_outbound_call_uses_exotel_connect_api(respx_mock, mocker):
     mocker.patch.object(settings, "EXOTEL_API_KEY", "key")
     mocker.patch.object(settings, "EXOTEL_API_TOKEN", "token")
     mocker.patch.object(settings, "EXOTEL_ACCOUNT_SID", "sid")
@@ -35,7 +35,7 @@ async def test_outbound_call_uses_exotel_connect_api(respx, mocker):
     mocker.patch.object(settings, "EXOTEL_CALLER_ID", "08000000000")
     mocker.patch.object(settings, "EXOTEL_STREAM_URL", "wss://voice.example/ws/exotel/stream")
 
-    route = respx.post("https://api.in.exotel.com/v1/Accounts/sid/Calls/connect").mock(
+    route = respx_mock.post("https://api.in.exotel.com/v1/Accounts/sid/Calls/connect").mock(
         return_value=httpx.Response(200, text="<twilioresponse><call><sid>call-123</sid></call></twilioresponse>")
     )
 

@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     EXOTEL_CALL_TIME_LIMIT_SECONDS: int = Field(default=3600, description="Maximum connected call duration")
 
     # Voice pipeline reasoning configuration (Groq AI or main backend)
-    AI_PROVIDER: str = Field(default="groq", description="Voice reasoning provider: groq or backend")
+    AI_PROVIDER: str = Field(default="backend", description="Voice reasoning provider. 'backend' is the real marine agent; anything else is ignored and the backend is used anyway.")
     VOICE_PROVIDER: str = Field(default="sarvam", description="Speech provider: sarvam or local")
     LOCAL_STT_MODEL: str = Field(default="base", description="faster-whisper model name or local path")
     LOCAL_STT_DEVICE: str = Field(default="cpu", description="faster-whisper device")
@@ -68,9 +68,14 @@ class Settings(BaseSettings):
     SARVAM_DEFAULT_SPEAKER: str = Field(default="shubh", description="Default TTS speaker voice")
 
     # Main SALTY AI Backend Contract
-    AI_BACKEND_URL: str = Field(default="http://127.0.0.1:8010", description="Main SALTY AI intelligence backend URL")
-    AI_BACKEND_TIMEOUT_SECONDS: float = Field(default=10.0, description="HTTP timeout for AI backend calls")
-    AI_BACKEND_MAX_RETRIES: int = Field(default=2, description="Maximum retry count for AI backend")
+    AI_BACKEND_URL: str = Field(default="http://127.0.0.1:8010", description="SALTY marine agent URL")
+    # A real answer calls INCOIS THREDDS, which steps seaward past land cells,
+    # and takes fifteen to thirty seconds. Ten was below the floor, so every
+    # call timed out while the agent was working normally.
+    AI_BACKEND_TIMEOUT_SECONDS: float = Field(default=45.0, description="HTTP timeout for marine agent calls")
+    # One retry, not two. Three attempts at 45s is over two minutes of silence
+    # on a live phone call, by which point the caller has hung up.
+    AI_BACKEND_MAX_RETRIES: int = Field(default=1, description="Maximum retry count for the marine agent")
     AI_BACKEND_RETRY_DELAY_SECONDS: float = Field(default=0.5, description="Initial retry delay in seconds")
 
     # Audio & Voice Activity Detection (VAD) Settings

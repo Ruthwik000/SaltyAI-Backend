@@ -159,6 +159,7 @@ async def test_backend_client_in_test_mode(monkeypatch):
 async def test_backend_client_in_production_mode(monkeypatch):
     """Verify AIBackendClient queries external HTTP endpoint when CALL_AGENT_TEST_MODE is False."""
     monkeypatch.setattr(settings, "CALL_AGENT_TEST_MODE", False)
+    monkeypatch.setattr(settings, "AI_PROVIDER", "backend")
     client = AIBackendClient(base_url="http://mock-prod-backend:8080")
 
     with respx.mock(base_url="http://mock-prod-backend:8080") as respx_mock:

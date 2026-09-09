@@ -4,12 +4,8 @@ import json
 from datetime import datetime, timezone
 
 from erddap_client import ERDDAPClient
-from fishing_zone import build_fishing_zone_data
-from geofencing import point_inside_zone
-from historical import HistoricalResearcher
 from groq_agent import ERDDAPTools, GroqAgent
 from risk_features import build_72h_feature_dataset
-from severe_weather import build_severe_weather_data
 
 
 class DemoClient(ERDDAPClient):
@@ -38,7 +34,7 @@ class DemoClient(ERDDAPClient):
 
 
 class DemoGroq(GroqAgent):
-    def _chat(self, messages, include_tools=True):
+    def _chat(self, messages, include_tools=True, mode="normal"):
         query = messages[1]["content"].lower()
         if messages[-1]["role"] != "tool":
             if "nearest potential" in query:
@@ -58,14 +54,7 @@ class DemoGroq(GroqAgent):
 def main():
     client = DemoClient()
     datasets = [{"dataset_id": "demo_marine", "title": "Demo marine forecast", "metadata": client.get_dataset_metadata("demo_marine")}]
-    severe = build_severe_weather_data(client, datasets)
-    assert all("value" in row for rows in severe["parameters"].values() if isinstance(rows, list) for row in rows)
-    researcher = HistoricalResearcher(client)
-    assert researcher.point("demo_marine", "SST", "2020-01-01", 17.5, 83.5)["records"]
-    assert build_fishing_zone_data(client, datasets)["parameters"]
     assert build_72h_feature_dataset(client, datasets, datetime(2019, 12, 31, tzinfo=timezone.utc), bbox=(17.0, 18.5, 82.5, 84.5))["records"]
-    polygon = {"type": "Polygon", "coordinates": [[[83, 17], [84, 17], [84, 18], [83, 18], [83, 17]]]}
-    assert point_inside_zone((83.5, 17.5), polygon)
 
     agent = DemoGroq(ERDDAPTools(client))
     queries = ["Where is the nearest Potential Fishing Zone today?", "What is the SST near Visakhapatnam?", "What are the wind and wave conditions for the next 3 days?", "Which region has high chlorophyll?", "Show ocean conditions for the next 72 hours.", "Compare SST between two regions.", "Is the sea condition expected to worsen tomorrow?", "When is the lowest-risk forecast window?"]

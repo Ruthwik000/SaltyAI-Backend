@@ -190,3 +190,45 @@ Backend prediction entry point:
 
 - `prediction_models.py` — transparent marine-risk and fishing-window models using retrieved forecast records only.
 - `GET /api/predictions` — strict prediction endpoint; it uses `synthetic_fallback=False` and returns `NOT AVAILABLE` when real source data cannot be retrieved.
+
+## Agent data sources verified 2026-09-08
+
+Every source below was queried live before it was added to the agent, per the
+handoff rule. Exact request, result and date recorded here so the next person
+does not have to rediscover them.
+
+| Need | Service | Request | Result |
+| --- | --- | --- | --- |
+| Sea state | INCOIS THREDDS NCSS | `/thredds/ncss/grid/osf/...` with `time` omitted | live values; `time=present` returns HTTP 400 |
+| PFZ advisories | INCOIS GeoServer WFS | `PFZ_Automation:pfzlines` | 106 nationally, 8 near Visakhapatnam |
+| EEZ boundary | INCOIS GeoServer WFS | `PFZ_EEZ:indiaeez`, no BBOX | 19 MultiLineString, 1005 vertices, 29 KB |
+| Advisories | INCOIS mobile API | HWA/SSA | `HWAJson`/`SSAJson` are JSON strings inside JSON |
+| Tides | Open-Meteo Marine | `sea_level_height_msl` | 6-hourly, turning points derived |
+| Thunderstorm, lightning, air weather | Open-Meteo Forecast | `weather_code,cape,precipitation,wind_gusts_10m` | code 95 on two hours, CAPE to 4860 J/kg |
+| Chlorophyll | NOAA CoastWatch ERDDAP | `noaacwNPPN20VIIRSDINEOFDaily` | 2026-09-05, 0.24-0.98 mg/m3 off Visakhapatnam |
+| SST | NOAA CoastWatch ERDDAP | `noaacrwsstDaily` | 2026-09-06, 29.4 degC |
+| SST anomaly | NOAA CoastWatch ERDDAP | `noaacrwsstanomalybaselineDaily` | 2026-09-01, -0.26 degC |
+
+Negative findings, which matter as much:
+
+- **INCOIS ERDDAP cannot serve chlorophyll.** `allDatasets.json` on 2026-09-08:
+  `IRS_chlorophyll_datasets` ends 2006-03-21, `incois_oceansat2_datasets` ends
+  2020-05-01, `NOAA_AVHRR_AMSR_datasets` ends 2011-10-04,
+  `incois_argo_sst_weekly` ends 2010-12-29. Only the ARGO grids still update.
+  This closes item 4 under "Known limitations": chlorophyll is real, but it has
+  to come from NOAA, and it must never be badged as an INCOIS product.
+- **INCOIS publishes no lightning product**, and IMD cyclone bulletins are
+  pages, not an API. Cyclone questions are answered from the High Wave and
+  Swell Surge advisories plus the Open-Meteo thunderstorm outlook, and the
+  answer must say the named-cyclone bulletin has to come from IMD.
+- **There is no machine-readable feed of gazetted restricted or no-fishing
+  areas.** `get_hazard_zones` reports advisories, the EEZ edge and storm hours,
+  and states plainly that restricted areas are not covered.
+
+Three traps in the NOAA grids, all found by querying rather than assuming:
+chlorophyll carries a fourth `altitude` axis; chlorophyll and the anomaly grid
+run latitude north to south so their range is written high:low, while the SST
+grid runs south to north; and the three grids are 9 km, 5 km and 5 km, so
+cells never coincide and have to be matched to the nearest neighbour.
+
+`test_sources.py` re-checks all of this live: `python test_sources.py`.

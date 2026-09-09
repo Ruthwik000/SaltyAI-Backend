@@ -8,7 +8,7 @@ import asyncio
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -110,8 +110,46 @@ app.include_router(voice_router)
 
 
 @app.get("/", tags=["Root"])
-async def root():
-    """Root info endpoint providing service metadata and connection instructions."""
+async def root(request: Request):
+    """Root info endpoint, and a tripwire for a misconfigured Exotel flow.
+
+    Exotel reaching THIS path with call parameters means the flow is using an
+    HTTP applet - Passthru or similar - and not the Voicebot applet. The call
+    connects, Exotel fetches this page, gets a cheerful 200, moves to the next
+    step in the flow, finds nothing, and hangs up. Nothing in the logs said so:
+    a 200 OK on "/" looks like health traffic.
+    """
+    params = request.query_params
+    if params.get("CallSid") or params.get("CallFrom"):
+        # A live call is asking where to stream.
+        #
+        # The Voicebot applet takes either a ws(s) URL, which it connects to
+        # directly, or an http(s) URL, which it FETCHES and expects to be told
+        # the ws(s) URL by. Putting the service root in that box picks the
+        # second behaviour: Exotel fetched this page, got service metadata
+        # instead of a WebSocket address, had nowhere to send the audio, and
+        # dropped the call. Nothing looked wrong - a 200 OK on "/" reads as
+        # health traffic.
+        #
+        # So answer the question it is actually asking.
+        stream_url = settings.EXOTEL_STREAM_URL or ""
+        if not stream_url:
+            host = request.headers.get("x-forwarded-host") or request.url.hostname or ""
+            stream_url = f"wss://{host}/ws/exotel/stream"
+
+        # Carry the caller's number through, so the agent knows who is on the
+        # line before anyone has spoken.
+        caller = params.get("CallFrom") or params.get("From") or ""
+        if caller:
+            joiner = "&" if "?" in stream_url else "?"
+            stream_url = f"{stream_url}{joiner}CallFrom={caller}"
+
+        logger.info(
+            "Exotel asked where to stream for CallSid=%s (from %s): answering %s",
+            params.get("CallSid", "?"), caller or "?", stream_url,
+        )
+        return JSONResponse({"url": stream_url, "ws_url": stream_url})
+
     return JSONResponse({
         "service": "SALTY AI Call Agent",
         "version": "1.0.0",

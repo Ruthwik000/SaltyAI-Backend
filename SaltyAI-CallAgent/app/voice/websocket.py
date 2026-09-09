@@ -32,7 +32,14 @@ from app.speech.audio_utils import b64_to_pcm, pcm_to_b64, chunk_pcm_audio, calc
 from app.speech.stt import stt_client
 
 from app.speech.tts import tts_client
-from app.conversation.manager import conversation_manager, needs_location_context, location_from_reply
+from app.conversation.manager import (
+    conversation_manager,
+    needs_location_context,
+    location_from_reply,
+    location_in_question,
+    state_for_location,
+)
+from app.conversation.prompts import spoken as spoken_prompt
 from app.ai.backend_client import ai_backend_client
 from app.api.emergency import emergency_detector
 
@@ -68,17 +75,23 @@ def infer_response_language(text: str, fallback: str) -> str:
 router = APIRouter(tags=["Voice Stream"])
 
 # English-only opening prompt for every call.
-GREETING_MESSAGE = "Hello! This is SALTY AI. How can I help you today?"
+# The call opens before anyone has spoken, so there is no detected language
+# yet: it goes out in the deployment's default. Greeting an Andhra fisherman in
+# English is the same mistake the location prompt used to make - he cannot
+# answer a question he did not understand, and the line sounds like it is not
+# for him.
+GREETING_LANGUAGE = settings.DEFAULT_FALLBACK_LANGUAGE
+GREETING_MESSAGE = spoken_prompt("greeting", GREETING_LANGUAGE)
 
 
 async def prewarm_greetings():
-    """Pre-synthesize the English greeting to reduce pickup latency."""
+    """Pre-synthesize the greeting so the line does not open with dead air."""
     try:
         if settings.SARVAM_API_KEY or settings.VOICE_PROVIDER.lower() == "local":
             logger.info("Pre-warming English greeting audio cache...")
             await tts_client.synthesize(
                 GREETING_MESSAGE,
-                language_code="en-IN",
+                language_code=GREETING_LANGUAGE,
                 sample_rate=settings.AUDIO_SAMPLE_RATE,
             )
             logger.info("Greeting audio cache pre-warmed successfully.")
@@ -279,47 +292,59 @@ async def handle_user_turn(
         # Location gate: marine questions must establish a caller location
         # before the reasoning model is allowed to answer them.
         if call_sess and (call_sess.awaiting_location or (needs_location_context(transcript) and not call_sess.has_location())):
-            if call_sess.awaiting_location:
+            # Anything the agent needs FROM the caller is asked for on the
+            # call, in the language the caller is already speaking. These
+            # prompts used to be English strings played with the language code
+            # hard-coded to en-IN, which asked a Telugu fisherman a question he
+            # could not answer.
+            async def ask(prompt_key: str) -> None:
+                text = spoken_prompt(prompt_key, stream_session.language)
+                call_sess.add_user_message(transcript, detected_language=stream_session.language)
+                call_sess.add_assistant_message(text)
+                logger.info(
+                    "[CALL TRANSCRIPT] call_id=%s | language=%s | location=unknown | caller=%r | assistant=%r",
+                    call_id, stream_session.language, transcript, text,
+                )
+                await stream_session.cancel_active_tts()
+                generation = stream_session.generation_id
+                stream_session.active_tts_task = asyncio.create_task(
+                    play_tts_audio_to_exotel(
+                        websocket, stream_session, text, stream_session.language,
+                        mark_name="location_question", target_generation_id=generation,
+                    )
+                )
+
+            # The caller may have said where they are inside the question -
+            # "kakinada lo weather enti", "కాకినాడ లో వాతావరణం". Asking such a
+            # caller which harbour they are calling from wastes a turn and
+            # makes the agent sound like it was not listening.
+            named = location_in_question(transcript)
+            if named and not call_sess.awaiting_location:
+                conversation_manager.update_location(call_id, named)
+                call_sess.awaiting_location = False
+                logger.info("[LOCATION] call_id=%s | taken from the question: %s",
+                            call_id, named.name)
+                transcript_for_ai = transcript
+            elif call_sess.awaiting_location:
                 caller_location = location_from_reply(transcript)
                 if caller_location:
                     conversation_manager.update_location(call_id, caller_location)
                     call_sess.awaiting_location = False
                     transcript_for_ai = (
-                        f"The caller's location is {caller_location.name}. "
-                        "Use this location to answer the caller's most recent marine question."
+                        f"The caller is at {caller_location.name}. "
+                        "Answer the caller's most recent marine question for that place."
                     )
                 else:
-                    location_prompt = "Please tell me your coastal city, village, or fishing location so I can answer you."
-                    call_sess.add_user_message(transcript, detected_language=stream_session.language)
-                    call_sess.add_assistant_message(location_prompt)
-                    logger.info(
-                        "[CALL TRANSCRIPT] call_id=%s | language=%s | location=unknown | caller=%r | assistant=%r",
-                        call_id, stream_session.language, transcript, location_prompt,
-                    )
-                    await stream_session.cancel_active_tts()
-                    generation = stream_session.generation_id
-                    task = asyncio.create_task(play_tts_audio_to_exotel(
-                        websocket, stream_session, location_prompt, "en-IN",
-                        mark_name="location_question", target_generation_id=generation,
-                    ))
-                    stream_session.active_tts_task = task
+                    # Two different failures, and the caller deserves to know
+                    # which: they said nothing place-shaped, or they named
+                    # somewhere this cannot position. Asking "say it again" when
+                    # the real problem is an unknown village loops forever.
+                    said_something = bool(transcript.strip()) and len(transcript.split()) <= 8
+                    await ask("unknown_place" if said_something else "retry_location")
                     return
             else:
                 call_sess.awaiting_location = True
-                location_prompt = "Which coastal city, village, or fishing location are you calling from?"
-                call_sess.add_user_message(transcript, detected_language=stream_session.language)
-                call_sess.add_assistant_message(location_prompt)
-                logger.info(
-                    "[CALL TRANSCRIPT] call_id=%s | language=%s | location=unknown | caller=%r | assistant=%r",
-                    call_id, stream_session.language, transcript, location_prompt,
-                )
-                await stream_session.cancel_active_tts()
-                generation = stream_session.generation_id
-                task = asyncio.create_task(play_tts_audio_to_exotel(
-                    websocket, stream_session, location_prompt, "en-IN",
-                    mark_name="location_question", target_generation_id=generation,
-                ))
-                stream_session.active_tts_task = task
+                await ask("ask_location")
                 return
         else:
             transcript_for_ai = transcript
@@ -347,6 +372,10 @@ async def handle_user_turn(
 
         history_payload = call_sess.get_history_payload() if call_sess else []
         location = call_sess.location if call_sess else None
+        # The advisory feed matches on district and state; sending the state
+        # alongside the position is what lets a High Wave Alert for this coast
+        # be found at all.
+        location_state = state_for_location(location)
 
         t_ai_start = time.perf_counter()
         ai_resp = await ai_backend_client.query(
@@ -356,6 +385,7 @@ async def handle_user_turn(
             language=stream_session.language,
             conversation_history=history_payload,
             location=location,
+            state=location_state,
         )
         t_ai_end = time.perf_counter()
         t_ai_ms = (t_ai_end - t_ai_start) * 1000
@@ -497,7 +527,7 @@ async def exotel_agentstream_endpoint(websocket: WebSocket):
                             websocket=websocket,
                             stream_session=stream_session,
                             text=greeting_text,
-                            language_code="en-IN",
+                            language_code=GREETING_LANGUAGE,
                             mark_name="greeting_end",
                             target_generation_id=greet_gen_id,
                         )

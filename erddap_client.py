@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import random
 import ssl
 from datetime import datetime
 from dataclasses import dataclass
@@ -11,6 +10,13 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+
+
+def table_records(response: dict[str, Any]) -> list[dict[str, Any]]:
+    """Turn an ERDDAP JSON table into row dictionaries."""
+    table = response.get("table", {})
+    columns, rows = table.get("columnNames", []), table.get("rows", [])
+    return [dict(zip(columns, row)) for row in rows]
 
 
 class ERDDAPError(RuntimeError):
@@ -36,7 +42,6 @@ class ERDDAPClient:
     base_url: str = "https://erddap.incois.gov.in/erddap"
     timeout: float = 30.0
     verify_ssl: bool = True
-    synthetic_fallback: bool = True
 
     def __post_init__(self) -> None:
         self.base_url = self.base_url.rstrip("/")
@@ -69,42 +74,6 @@ class ERDDAPClient:
         # the request target, while ERDDAP correctly decodes the query.
         encoded_expression = quote(expression, safe=",")
         return self._get_json(f"griddap/{quote(dataset_id, safe='')}.json?{encoded_expression}")
-
-    @staticmethod
-    def _synthetic_value(variable: str) -> float:
-        """Generate prototype-only values in broad, meaningful marine ranges."""
-        name = variable.lower().replace("_", " ")
-        if any(term in name for term in ("temperature", "sst", "sea temp")):
-            return round(random.uniform(24.0, 31.0), 2)       # degrees C
-        if any(term in name for term in ("chlor", "chl")):
-            return round(random.uniform(0.05, 5.0), 3)       # mg/m3
-        if any(term in name for term in ("wind", "gust")):
-            return round(random.uniform(0.0, 25.0), 2)       # m/s
-        if any(term in name for term in ("wave", "swell")):
-            return round(random.uniform(0.1, 5.0), 2)       # metres
-        if any(term in name for term in ("rain", "precip")):
-            return round(random.uniform(0.0, 80.0), 2)       # mm
-        if any(term in name for term in ("lightning", "thunder")):
-            return round(random.uniform(0.0, 20.0), 2)      # events
-        if any(term in name for term in ("current", "velocity")):
-            return round(random.uniform(0.05, 1.5), 3)      # m/s
-        return round(random.uniform(0.0, 100.0), 2)
-
-    def _synthetic_query(self, dataset_id: str, variable: str, start: str, end: str | None = None, bbox: tuple[float, float, float, float] | None = None, point: tuple[float, float] | None = None, variables: list[str] | None = None) -> dict[str, Any]:
-        """Return clearly labelled synthetic rows when the prototype is offline."""
-        names = variables or [variable]
-        if point:
-            locations = [point]
-        else:
-            values = bbox or (0.0, 0.0, 0.0, 0.0)
-            locations = [((values[0] + values[1]) / 2, (values[2] + values[3]) / 2)]
-        times = [start] if end is None else [start, end]
-        columns = ["time", "latitude", "longitude", *names]
-        rows = []
-        for index, timestamp in enumerate(times):
-            latitude, longitude = locations[min(index, len(locations) - 1)]
-            rows.append([timestamp, latitude, longitude, *[self._synthetic_value(name) for name in names]])
-        return {"synthetic": True, "warning": "SYNTHETIC TEST DATA — ERDDAP fetch failed", "table": {"columnNames": columns, "rows": rows}}
 
     def _get_bytes(self, path: str) -> bytes:
         """Fetch a binary ERDDAP response, such as NetCDF."""
@@ -309,51 +278,31 @@ class ERDDAPClient:
 
     def get_point_data(self, dataset_id: str, variable: str, time: str, lat: float, lon: float) -> dict[str, Any]:
         """Retrieve one griddap value at a time/latitude/longitude point."""
-        try:
-            _, dimensions, names = self._validated_context(dataset_id, [variable], time)
-            expression = self._build_expression(variable, dimensions, names, time, None, (lat, lat, lon, lon), (lat, lon))
-            return self._query(dataset_id, expression)
-        except (ERDDAPConnectionError, DatasetNotFoundError):
-            if not self.synthetic_fallback:
-                raise
-            return self._synthetic_query(dataset_id, variable, time, point=(lat, lon))
+        _, dimensions, names = self._validated_context(dataset_id, [variable], time)
+        expression = self._build_expression(variable, dimensions, names, time, None, (lat, lat, lon, lon), (lat, lon))
+        return self._query(dataset_id, expression)
 
     def get_region_data(self, dataset_id: str, variable: str, bbox: Any, time_range: tuple[str, str]) -> dict[str, Any]:
         """Retrieve a spatial region for one time range."""
         start, end = time_range
         values = self._bbox_values(bbox)
-        try:
-            _, dimensions, names = self._validated_context(dataset_id, [variable], start, end)
-            return self._query(dataset_id, self._build_expression(variable, dimensions, names, start, end, values))
-        except (ERDDAPConnectionError, DatasetNotFoundError):
-            if not self.synthetic_fallback:
-                raise
-            return self._synthetic_query(dataset_id, variable, start, end, bbox=values)
+        _, dimensions, names = self._validated_context(dataset_id, [variable], start, end)
+        return self._query(dataset_id, self._build_expression(variable, dimensions, names, start, end, values))
 
     def get_time_series(self, dataset_id: str, variable: str, bbox: Any, start: str, end: str) -> dict[str, Any]:
         """Retrieve a variable's time series over a spatial region."""
         values = self._bbox_values(bbox)
-        try:
-            _, dimensions, names = self._validated_context(dataset_id, [variable], start, end)
-            return self._query(dataset_id, self._build_expression(variable, dimensions, names, start, end, values))
-        except (ERDDAPConnectionError, DatasetNotFoundError):
-            if not self.synthetic_fallback:
-                raise
-            return self._synthetic_query(dataset_id, variable, start, end, bbox=values)
+        _, dimensions, names = self._validated_context(dataset_id, [variable], start, end)
+        return self._query(dataset_id, self._build_expression(variable, dimensions, names, start, end, values))
 
     def get_forecast(self, dataset_id: str, variables: list[str], bbox: Any, start: str, end: str) -> dict[str, Any]:
         """Retrieve several variables over the same spatial/time window."""
         if not variables:
             raise MetadataValidationError("variables must contain at least one variable name")
         values = self._bbox_values(bbox)
-        try:
-            _, dimensions, names = self._validated_context(dataset_id, variables, start, end)
-            expressions = [self._build_expression(variable, dimensions, names, start, end, values) for variable in variables]
-            return self._query(dataset_id, ",".join(expressions))
-        except (ERDDAPConnectionError, DatasetNotFoundError):
-            if not self.synthetic_fallback:
-                raise
-            return self._synthetic_query(dataset_id, variables[0], start, end, bbox=values, variables=variables)
+        _, dimensions, names = self._validated_context(dataset_id, variables, start, end)
+        expressions = [self._build_expression(variable, dimensions, names, start, end, values) for variable in variables]
+        return self._query(dataset_id, ",".join(expressions))
 
     def get_netcdf(self, dataset_id: str, variable: str, bbox: Any, start: str, end: str) -> bytes:
         """Retrieve a validated griddap selection in ERDDAP NetCDF format."""

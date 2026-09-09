@@ -358,6 +358,7 @@ async def test_backend_client_routes_to_groq_when_test_mode_enabled(monkeypatch)
 async def test_backend_client_routes_to_main_backend_when_test_mode_disabled(monkeypatch):
     """Verify AIBackendClient calls production AI_BACKEND_URL when CALL_AGENT_TEST_MODE is False."""
     monkeypatch.setattr("app.config.settings.CALL_AGENT_TEST_MODE", False)
+    monkeypatch.setattr("app.config.settings.AI_PROVIDER", "backend")
 
     backend = AIBackendClient(base_url="http://mock-backend:8080")
 
