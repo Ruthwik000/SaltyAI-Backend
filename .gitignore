@@ -24,8 +24,13 @@ htmlcov/
 ui2/
 
 # Downloaded/local voice artifacts
-SaltyAI-CallAgent/models/
-SaltyAI-CallAgent/*.ses
-SaltyAI-CallAgent/**/*.ses
-SaltyAI-CallAgent/**/*.wav
+call-agent/models/
+call-agent/*.ses
+call-agent/**/*.ses
+call-agent/**/*.wav
 *.ses
+
+# Runtime logs and generated audio
+logs/
+*.log
+reply.wav

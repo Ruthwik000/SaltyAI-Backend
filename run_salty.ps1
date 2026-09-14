@@ -39,10 +39,10 @@ $env:SALTY_API_PORT = "$ApiPort"
 $env:PORT = "$CallAgentPort"
 
 Write-Host "Starting SALTY Data API on http://127.0.0.1:$ApiPort..." -ForegroundColor Green
-$apiProcess = Start-Process -FilePath $PythonBin -ArgumentList "api_server.py" -WorkingDirectory $RootDir -PassThru
+$apiProcess = Start-Process -FilePath $PythonBin -ArgumentList "api_server.py" -WorkingDirectory (Join-Path $RootDir "backend") -PassThru
 
 Write-Host "Starting SALTY Voice Call Agent on http://127.0.0.1:$CallAgentPort..." -ForegroundColor Green
-$callAgentProcess = Start-Process -FilePath $PythonBin -ArgumentList "-m uvicorn app.main:app --host 0.0.0.0 --port $CallAgentPort" -WorkingDirectory (Join-Path $RootDir "SaltyAI-CallAgent") -PassThru
+$callAgentProcess = Start-Process -FilePath $PythonBin -ArgumentList "-m uvicorn app.main:app --host 0.0.0.0 --port $CallAgentPort" -WorkingDirectory (Join-Path $RootDir "call-agent") -PassThru
 
 # Wait and verify readiness
 Start-Sleep -Seconds 3

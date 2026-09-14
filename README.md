@@ -45,7 +45,7 @@ animation, vectors, legends, WMS layers, and inspection tools. PFZ and
 ocean-colour products are not wired as independently controlled official layers
 where the required service request has not been verified.
 
-### Voice call agent (`SaltyAI-CallAgent`)
+### Voice call agent (`call-agent`)
 
 The FastAPI service gives basic phones a regional-language voice interface via
 Exotel AgentStream. It supports:
@@ -69,10 +69,10 @@ flowchart LR
   N --> C[Browser state and demo fallbacks]
   N --> P[Next.js proxy routes]
   P --> I[INCOIS OSF / WMS / ERDDAP]
-  N --> D[Root Python data API :8010]
+  N --> D[Python data API backend/ :8010]
   D --> E[ERDDAP client]
   D --> M[Risk, fishing, severe-weather and prediction modules]
-  D --> O[Groq tool agent]
+  D --> O[NVIDIA NIM tool-calling agent]
   N --> V[Voice gateway :8001]
   V --> S[STT / TTS providers]
   V --> D
@@ -104,7 +104,7 @@ sequenceDiagram
   participant E as Exotel
   participant V as FastAPI voice gateway
   participant STT as Sarvam STT/local STT
-  participant AI as Root AI/data API
+  participant AI as Data API + NIM agent
   participant TTS as Sarvam TTS/local TTS
 
   F->>E: Phone call
@@ -128,11 +128,11 @@ sequenceDiagram
   fishing-zone, vessel, research, alerts, geofencing, SAR, and AI pages.
 - `ui2/components` contains the application shell, role widgets, maps, charts,
   data badges, AI drawer, call launcher, and workflow views.
-- `ui2/lib/marine-context.tsx` owns role, location, local notifications,
+- `ui2/lib/marine-context.jsx` owns role, location, local notifications,
   journeys, saved zones, and backend health state.
-- `ui2/lib/marine-data.ts` contains the bundled prototype dataset used by
-  dashboard cards and fallback workflows.
-- `ui2/lib/*-api.ts` contains browser API clients and source-aware fallback
+- `ui2/lib/marine-data.js` contains the bundled demo dataset. It is used
+  only when the data API cannot answer, and every screen badges it as demo.
+- `ui2/lib/*-api.js` contains browser API clients and source-aware fallback
   handling. Results identify `live` versus `demo` data.
 
 ### Next.js integration routes
@@ -145,7 +145,7 @@ sequenceDiagram
   `ww3/`, `currents/`, and `winds/` datasets.
 - `GET /api/erddap/[...path]`: ERDDAP proxy for catalogue and data requests.
 
-### Root Python data API (`api_server.py`)
+### Python data API (`backend/api_server.py`)
 
 Runs on port `8010`. Every endpoint that exists:
 
@@ -157,11 +157,22 @@ Runs on port `8010`. Every endpoint that exists:
 | GET | `/api/research/timeseries` | ERDDAP time series for a dataset and point |
 | GET | `/api/research/frames` | ERDDAP frame list for animation |
 | GET | `/api/research/frame.png` | One rendered frame |
-| POST | `/api/llm/chat` | Groq tool-calling agent (this is the chat agent) |
+| GET | `/api/fisherman/zones?lat&lon` | Nearest INCOIS PFZ advisory lines |
+| GET | `/api/fisherman/zones/:id` | Zone detail with live conditions at the zone |
+| GET | `/api/fisherman/conditions?lat&lon` | INCOIS sea state + Open-Meteo air weather |
+| GET | `/api/fisherman/alerts?lat&lon` | INCOIS advisories for the nearest coast |
+| POST | `/api/fisherman/risk/assess` | SALTY risk model over INCOIS conditions along the track |
+| POST | `/api/fisherman/trip/start`, `/trip/:id/ping`, `/trip/:id/end` | Trip registration from the app |
+| GET | `/api/operations/fleet?lat&lon` | Trips registered and still at sea |
+| POST | `/api/operations/sar/predict` | Leeway drift from live INCOIS wind and current |
+| POST | `/api/llm/chat` | NVIDIA NIM tool-calling agent (the chat agent) |
 | POST | `/api/ai/query` | Same agent, response shape the voice gateway expects |
 
 There is no synthetic or prototype mode. A source that cannot answer returns
-`NOT AVAILABLE` and the agent says so; nothing is filled in.
+`NOT AVAILABLE` and the agent says so; nothing is filled in. Fields a source
+does not publish (a PFZ advisory has no suitability score, depth or species)
+are returned as null. The console falls back to its demo data only when one
+of these endpoints fails, and labels it.
 
 ### Data client modules
 
@@ -176,7 +187,8 @@ There is no synthetic or prototype mode. A source that cannot answer returns
 | `route_client.py` | track check, hazard summary | composed from the above |
 | `erddap_client.py` | catalogue and archive queries | INCOIS ERDDAP |
 | `prediction_models.py` | the risk score and fishing-window model | no network |
-| `groq_agent.py` | the agent: 17 tools, mode voices, honesty guards | Groq |
+| `marine_agent.py` | the agent: 17 tools, mode voices, honesty guards | NVIDIA NIM |
+| `field_api.py` | adapters behind the `/api/fisherman` and `/api/operations` endpoints | composed from the above |
 
 `ocean_color_client.py` reads NOAA rather than INCOIS for a reason recorded in
 its docstring: INCOIS ERDDAP's newest chlorophyll pixel is from 2020 and its
@@ -186,8 +198,10 @@ water productive today".
 ### Checking the data sources
 
 ```bash
-python test_sources.py            # every live source, pass/fail with a real value
-python test_sources.py --only tides
+cd backend
+python -m tests.test_sources               # every live source, pass/fail with a real value
+python -m tests.test_sources --only tides
+python -m scripts.check_llm                # NIM key, model, and a tool-call probe
 ```
 
 Run it before a demo. It hits the real services, asserts a real value came
@@ -200,7 +214,7 @@ back, and never falls back — a source that is down reports FAIL.
 - `POST /exotel/call`: start an outbound Exotel call.
 - `WS /ws/exotel/stream` and `WS /ws/voice/stream`: bidirectional voice stream.
 
-The gateway calls the root API through `app/ai/backend_client.py` and forwards
+The gateway calls the data API through `app/ai/backend_client.py` and forwards
 detected emergencies through `app/api/emergency.py`. It is a separate service,
 not a module inside the Next.js server.
 
@@ -218,30 +232,62 @@ not a module inside the Next.js server.
 - `check_route` checks the water along a track. It is not navigation: it knows
   nothing about shoals, traffic, fuel or the boat.
 
+## Repository layout
+
+```
+salty/
+├── backend/              Python data API and marine agent (port 8010)
+│   ├── api_server.py     HTTP entry point
+│   ├── marine_agent.py   NVIDIA NIM tool-calling agent
+│   ├── field_api.py      live adapters for the console's fisherman/operator screens
+│   ├── *_client.py       INCOIS, Open-Meteo and NOAA source clients
+│   ├── scripts/          check_llm, check_incois diagnostics
+│   └── tests/            offline agent-loop tests and live source checks
+├── call-agent/           FastAPI voice gateway for Exotel phone calls (port 8001)
+│   ├── app/              gateway code (voice, speech, ai, conversation, api)
+│   ├── scripts/          verify_call_agent, test_call_local, test_location_flow
+│   └── tests/            pytest suite
+├── ui2/                  Next.js web console (separate repository, git-ignored here)
+├── docs/context.md       INCOIS integration handoff notes
+├── notebooks/            reference.ipynb
+├── run_salty.sh          start everything (Linux/macOS)
+└── run_salty.ps1         start the backend services (Windows)
+```
+
+## Configuration
+
+The marine agent runs on NVIDIA NIM. Get a key at https://build.nvidia.com and:
+
+```bash
+cp backend/.env.example backend/.env        # set NVIDIA_API_KEY
+cp call-agent/.env.example call-agent/.env  # Exotel, Sarvam; NVIDIA_API_KEY for test mode
+```
+
+`NIM_MODEL` defaults to `openai/gpt-oss-20b`, which supports tool calling on
+NIM. Any other NIM model can be used if it supports tool calling;
+`python -m scripts.check_llm` confirms it emits a tool call.
+
 ## Run locally
 
 ```bash
 ./run_salty.sh
 ```
 
-This starts the web console at `http://127.0.0.1:3000`, the root data API at
-`http://127.0.0.1:8010`, and attempts to start the voice gateway at
-`http://127.0.0.1:8001` when its dependencies are available. The voice gateway
-still requires `SaltyAI-CallAgent/.env` configuration for real Exotel/Sarvam
-calls.
-
-For live root-API catalog access:
-
-```bash
-SALTY_LIVE=1 python3 api_server.py
-```
+This starts the data API at `http://127.0.0.1:8010`, the voice gateway at
+`http://127.0.0.1:8001`, and the web console at `http://127.0.0.1:3000` when
+`ui2/node_modules` exists. Real calls also need `call-agent/.env` configured
+for Exotel and Sarvam.
 
 For frontend checks from `ui2`:
 
 ```bash
-./node_modules/.bin/tsc --noEmit
+npx tsc --noEmit
 npm run lint
 ```
 
-Python phase and voice-agent tests are available as `test_*.py` in the root
-and under `SaltyAI-CallAgent/tests`.
+Tests:
+
+```bash
+cd backend && python -m tests.test_research_mode && python -m tests.test_phase10_11
+cd call-agent && python -m pytest
+```
