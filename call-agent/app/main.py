@@ -16,6 +16,7 @@ from app.config import settings
 from app.api.health import router as health_router
 from app.api.exotel import router as exotel_router
 from app.voice.websocket import router as voice_router, prewarm_greetings
+from app.api.voice_api import router as browser_voice_router
 from app.conversation.manager import conversation_manager
 
 # Configure structured logging. Keep console output and add a rotating local
@@ -107,6 +108,7 @@ app.add_middleware(
 app.include_router(health_router)
 app.include_router(exotel_router)
 app.include_router(voice_router)
+app.include_router(browser_voice_router)
 
 
 @app.get("/", tags=["Root"])
