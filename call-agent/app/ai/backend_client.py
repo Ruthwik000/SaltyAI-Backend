@@ -158,6 +158,10 @@ class AIBackendClient:
                 if response.status_code == 200:
                     data = response.json()
                     validated_response = AIQueryResponse.model_validate(data)
+                    if not (validated_response.response or "").strip():
+                        # Speaking an empty string is silence on a live call.
+                        logger.error(f"AI Backend returned an empty answer | call_id: {call_id}")
+                        break
                     logger.info(
                         f"AI Backend query succeeded in {latency_ms:.1f}ms | call_id: {call_id} | "
                         f"priority: {validated_response.priority}"

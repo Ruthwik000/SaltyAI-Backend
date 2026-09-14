@@ -1068,6 +1068,12 @@ class MarineAgent:
             # has to be two spoken sentences.
             "max_tokens": self._MAX_COMPLETION.get(mode, 700),
         }
+        if "gpt-oss" in self.model:
+            # gpt-oss reasons before it writes, and the reasoning is billed
+            # against max_tokens. Low effort roughly halves it on NIM, which
+            # keeps a phone answer fast and inside its budget. Other NIM models
+            # may reject the parameter, so it is only sent to gpt-oss.
+            payload_data["reasoning_effort"] = "medium" if mode == "research" else "low"
         if include_tools:
             # Only the schemas this mode can use. They are re-sent on every
             # round, so a phone call carrying six unusable research tools pays
@@ -1088,10 +1094,26 @@ class MarineAgent:
         # never silently spends a retry.
         waits = 0
         keys_tried = 0
+        widened = False
         while True:
             headers["Authorization"] = f"Bearer {self.api_keys[self._key_index]}"
             try:
-                return self._send(payload, headers)
+                result = self._send(payload, headers)
+                message = result.get("message") or {}
+                # Reasoning models (gpt-oss) spend completion tokens thinking
+                # before they write. If that used the whole budget, NIM stops
+                # with neither text nor a tool call; returning it made the
+                # phone agent speak silence. Give it one retry with more room.
+                if (result.get("finish_reason") == "length" and not widened
+                        and not message.get("tool_calls")
+                        and not (message.get("content") or "").strip()):
+                    widened = True
+                    payload_data["max_tokens"] = min(payload_data["max_tokens"] * 2, 4000)
+                    payload = json.dumps(payload_data).encode("utf-8")
+                    print(f"  NIM stopped at the token limit with no answer; retrying with "
+                          f"max_tokens={payload_data['max_tokens']}", file=sys.stderr, flush=True)
+                    continue
+                return result
             except _RateLimited as limited:
                 keys_tried += 1
                 if keys_tried < len(self.api_keys):
@@ -1150,7 +1172,7 @@ class MarineAgent:
         message: dict[str, Any] = {"role": "assistant", "content": raw.get("content") or ""}
         if raw.get("tool_calls"):
             message["tool_calls"] = raw["tool_calls"]
-        return {"message": message}
+        return {"message": message, "finish_reason": choices[0].get("finish_reason")}
 
     @staticmethod
     def _grounded_safety_response(data: dict[str, Any]) -> str:
@@ -1670,7 +1692,13 @@ class MarineAgent:
             messages.append(message)
             tool_calls = message.get("tool_calls", [])
             if not tool_calls:
-                response = message.get("content", "NOT AVAILABLE")
+                response = (message.get("content") or "").strip()
+                if not response:
+                    # An empty reply is never an answer; say plainly that none
+                    # was produced rather than handing silence to the caller.
+                    response = self._render_in_language(
+                        self._no_data_message(tool_results), user_query, language
+                    )
                 # No tool produced usable data, yet the answer quotes figures:
                 # the model filled the gap from memory. Replace it outright.
                 if not self._tool_data_usable(tool_results) and _MEASUREMENT.search(response):
