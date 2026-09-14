@@ -505,30 +505,10 @@ class Handler(BaseHTTPRequestHandler):
     # reply in a language by NAME. Passing the code straight through produced
     # the instruction "Reply in te-IN", which the model read as English.
     _SPOKEN_LANGUAGE = {
-        "te": "Telugu", "hi": "Hindi", "ta": "Tamil", "ml": "Malayalam", "od": "Odia",
+        "te": "Telugu", "hi": "Hindi", "ta": "Tamil", "ml": "Malayalam",
         "kn": "Kannada", "bn": "Bengali", "mr": "Marathi", "gu": "Gujarati",
         "or": "Odia", "pa": "Punjabi", "en": "English",
     }
-
-    # Scripts that belong to exactly one of the languages SALTY answers in.
-    _SCRIPTS = (
-        (re.compile(r"[\u0C00-\u0C7F]"), "Telugu"),
-        (re.compile(r"[\u0B80-\u0BFF]"), "Tamil"),
-        (re.compile(r"[\u0D00-\u0D7F]"), "Malayalam"),
-        (re.compile(r"[\u0C80-\u0CFF]"), "Kannada"),
-        (re.compile(r"[\u0980-\u09FF]"), "Bengali"),
-        (re.compile(r"[\u0A80-\u0AFF]"), "Gujarati"),
-        (re.compile(r"[\u0B00-\u0B7F]"), "Odia"),
-        (re.compile(r"[\u0A00-\u0A7F]"), "Punjabi"),
-    )
-
-    @classmethod
-    def _script_language(cls, text: str) -> str | None:
-        """The language a question is written in, when its script says so."""
-        for pattern, name in cls._SCRIPTS:
-            if pattern.search(text or ""):
-                return name
-        return None
 
     @classmethod
     def _language_name(cls, value: str) -> str:
@@ -568,18 +548,8 @@ class Handler(BaseHTTPRequestHandler):
                 history = []
             history = [turn for turn in history if isinstance(turn, dict)][-16:]
             location = payload.get("location")
-            # Answer in the language the question was asked in. The script of
-            # the question decides when it is unambiguous; Devanagari (Hindi or
-            # Marathi) and Latin text fall back to what the client detected
-            # from speech, or to "the same language as the question".
-            requested_language = str(payload.get("language") or "auto").strip()
-            written_in = self._script_language(query)
-            if written_in:
-                language = written_in
-            elif requested_language.lower() in {"", "auto", "same"}:
-                language = "the same language as the user's question"
-            else:
-                language = self._language_name(requested_language)
+            requested_language = str(payload.get("language", "English")).strip()
+            language = self._language_name(requested_language)
             location_context = ""
             bbox = None
             call_lat = call_lon = None
