@@ -13,7 +13,7 @@ from app.models.schemas import Location
 
 logger = logging.getLogger(__name__)
 
-# The port gazetteer lives with the data API, three directories up. Importing
+# The port gazetteer lives with the data API, in the repo's backend/ directory. Importing
 # it here lets the call agent tell a place it can position from ("Kakinada")
 # apart from one it cannot ("Delhi"), and ask again instead of sending a name
 # that will resolve to nothing. If it is not reachable - a deployment that
@@ -23,7 +23,7 @@ try:  # pragma: no cover - import path depends on how the service is deployed
     import os as _os
     import sys as _sys
     _BACKEND_ROOT = _os.path.abspath(
-        _os.path.join(_os.path.dirname(__file__), "..", "..", "..")
+        _os.path.join(_os.path.dirname(__file__), "..", "..", "..", "backend")
     )
     if _BACKEND_ROOT not in _sys.path:
         _sys.path.append(_BACKEND_ROOT)
