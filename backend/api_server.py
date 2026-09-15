@@ -640,6 +640,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    port = int(os.getenv("SALTY_API_PORT", "8010"))
-    print(f"SALTY data API listening on http://127.0.0.1:{port}")
-    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+    # Hosts like Render inject PORT and need a public bind; locally keep loopback.
+    port = int(os.getenv("PORT") or os.getenv("SALTY_API_PORT", "8010"))
+    host = os.getenv("SALTY_API_HOST") or ("0.0.0.0" if os.getenv("PORT") else "127.0.0.1")
+    print(f"SALTY data API listening on http://{host}:{port}", flush=True)
+    ThreadingHTTPServer((host, port), Handler).serve_forever()
